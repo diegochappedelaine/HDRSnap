@@ -1,23 +1,23 @@
 # HDRSnap
 
-Petit outil de capture d'écran maison pour Windows, pensé pour remplacer ShareX sur les affichages HDR — ShareX rate le tone-mapping et brûle les hautes lumières.
+A small homemade screenshot tool for Windows, built to replace ShareX on HDR displays — ShareX botches the tone mapping and blows out the highlights.
 
-## Ce que ça fait
+## What it does
 
-- Raccourci global (`F11` par défaut) → capture le moniteur sous le curseur via Windows Graphics Capture.
-- Sur un écran HDR : capture en FP16 scRGB, tone-mapping GPU via l'effet Direct2D `HDR Tone Map` (celui utilisé par Photos / Outil Capture d'écran de Windows). La cible est calculée à partir du MaxCLL mesuré sur l'image (percentile 99,99) et du blanc SDR réel du moniteur, avec un fallback CPU (Reinhard étendu) si le chemin GPU échoue.
-- Sortie en PNG SDR, un sous-dossier par application au premier plan (`Pictures\HDRSnap\<NomDuProcess>\yyyy-MM-dd HH-mm-ss.png`).
-- Tourne dans le system tray, une seule instance à la fois (mutex).
+- Global hotkey (`F11` by default) → captures the monitor under the cursor via Windows Graphics Capture.
+- On an HDR display: captures in FP16 scRGB, tone-maps on the GPU via the Direct2D `HDR Tone Map` effect (the same one Photos / Windows Snipping Tool use). The target is computed from the MaxCLL measured on the frame (99.99th percentile) and the monitor's actual SDR white level, with a CPU fallback (extended Reinhard) if the GPU path fails.
+- Outputs SDR PNGs, one subfolder per foreground app (`Pictures\HDRSnap\<ProcessName>\yyyy-MM-dd HH-mm-ss.png`).
+- Runs from the system tray, single instance (mutex).
 
 ## Build
 
-Nécessite le SDK .NET 9 (Windows).
+Requires the .NET 9 SDK (Windows).
 
 ```powershell
 dotnet build -c Release
 ```
 
-Pour un exécutable portable autonome (un seul .exe, sans dépendance au runtime installé) :
+For a self-contained portable executable (single .exe, no dependency on an installed runtime):
 
 ```powershell
 dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -o publish
@@ -25,26 +25,26 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 
 ## Installation
 
-1. Copier `publish\HDRSnap.exe` où tu veux (pas besoin d'installeur).
-2. Le lancer une fois pour générer la config par défaut dans `%APPDATA%\HDRSnap\config.json`.
-3. Pour un lancement automatique au démarrage : déposer un raccourci vers l'exe dans `shell:startup`.
+1. Copy `publish\HDRSnap.exe` anywhere you like (no installer needed).
+2. Run it once to generate the default config at `%APPDATA%\HDRSnap\config.json`.
+3. For autostart: drop a shortcut to the exe in `shell:startup`.
 
 ### Config (`%APPDATA%\HDRSnap\config.json`)
 
-| Clé | Défaut | Description |
+| Key | Default | Description |
 |---|---|---|
-| `Hotkey` | `F11` | Raccourci global (ex: `Ctrl+Shift+F11`) |
-| `OutputDir` | `Pictures\HDRSnap` | Dossier de sortie |
-| `CaptureCursor` | `false` | Inclure le curseur dans la capture |
-| `PlaySound` | `true` | Son de confirmation |
-| `SubfolderPerApp` | `true` | Sous-dossier nommé d'après le process au premier plan |
-| `TonemapHeadroom` | `1.25` | Marge au-dessus du blanc SDR allouée aux hautes lumières (× blanc SDR, en nits) |
+| `Hotkey` | `F11` | Global hotkey (e.g. `Ctrl+Shift+F11`) |
+| `OutputDir` | `Pictures\HDRSnap` | Output folder |
+| `CaptureCursor` | `false` | Include the cursor in the capture |
+| `PlaySound` | `true` | Confirmation sound |
+| `SubfolderPerApp` | `true` | Subfolder named after the foreground process |
+| `TonemapHeadroom` | `1.25` | Headroom above SDR white allotted to highlights (× SDR white, in nits) |
 
-Log : `%APPDATA%\HDRSnap\hdrsnap.log`.
+Log: `%APPDATA%\HDRSnap\hdrsnap.log`.
 
-Test en ligne de commande : `HDRSnap.exe --shoot` (ajouter `--forcetonemap` pour forcer le chemin de tone-mapping D2D même sur une frame qui reste dans la plage SDR — utile pour débugger).
+Command-line test: `HDRSnap.exe --shoot` (add `--forcetonemap` to force the D2D tone-mapping path even on a frame that stays within SDR range — useful for debugging).
 
-## Notes techniques / pièges connus
+## Technical notes / known gotchas
 
-- L'API `DisplayConfig GET_SDR_WHITE_LEVEL` échoue (erreur 87) sur certaines builds Windows 11 (observé sur build 26200). Fallback sur le registre : `HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\MonitorDataStore\<id>\SDRWhiteLevel` (valeur en unités de 1/1000, ex: 6000 = 480 nits), puis sur 200 nits par défaut si tout échoue.
-- Un mauvais blanc SDR détecté (fallback silencieux à 200 nits au lieu de la vraie valeur du moniteur) était la cause principale de hautes lumières brûlées dans une version antérieure — la chaîne API → registre → défaut plus le calcul MaxCLL au percentile 99,99 (plutôt que le max absolu, sensible à un pixel parasite) corrige ça.
+- The `DisplayConfig GET_SDR_WHITE_LEVEL` API fails (error 87) on some Windows 11 builds (observed on build 26200). Falls back to the registry: `HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\MonitorDataStore\<id>\SDRWhiteLevel` (value in 1/1000 units, e.g. 6000 = 480 nits), then to 200 nits by default if everything else fails.
+- A misdetected SDR white level (silently falling back to 200 nits instead of the monitor's real value) was the main cause of blown-out highlights in an earlier version — the API → registry → default chain, plus computing MaxCLL at the 99.99th percentile (instead of the absolute max, which is sensitive to a single stray pixel), fixes that.
