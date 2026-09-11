@@ -78,6 +78,16 @@ internal static class Native
 {
     [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
     [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+    public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", EntryPoint = "SetWindowsHookExW", SetLastError = true)]
+    public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
+    [DllImport("user32.dll")] public static extern bool UnhookWindowsHookEx(IntPtr hhk);
+    [DllImport("user32.dll")] public static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern bool QueryFullProcessImageName(IntPtr hProc, uint flags, System.Text.StringBuilder buf, ref uint size);
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT pt);
     [DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -248,6 +258,9 @@ internal static class Capturer
     /// Debug (--forcetonemap) : passe par le tone mapper D2D même si la frame reste en plage SDR.
     public static bool ForceToneMap;
 
+    /// Avertissement non bloquant du dernier tir (null si RAS), lu par le tray pour la bulle.
+    public static string LastWarning;
+
     static void EnsureDevice()
     {
         if (_device != null) return;
@@ -292,7 +305,9 @@ internal static class Capturer
 
     static string CaptureToFileCore(Config cfg)
     {
-        string appName = cfg.SubfolderPerApp ? ForegroundAppName() : null;
+        LastWarning = null;
+        var (fgName, fgExe) = ForegroundApp();
+        string appName = cfg.SubfolderPerApp ? fgName : null;
 
         Native.GetCursorPos(out var pt);
         IntPtr hmon = Native.MonitorFromPoint(pt, 2 /* MONITOR_DEFAULTTONEAREST */);
@@ -361,6 +376,7 @@ internal static class Capturer
                     {
                         // rien de significatif au-dessus du blanc SDR : simple remise à l'échelle
                         Program.Log($"plage SDR, pas de tone mapping (p99,99 = {maxRaw * 80f:0} nits, max = {absMax * 80f:0} nits)");
+                        WarnIfLooksLikeDesktop(fgName, fgExe, maxRaw * 80f, absMax * 80f, sdrNits);
                         bgra = ToneMapScRgbToBgra(map.DataPointer, (int)map.RowPitch, w, h, sdrNits);
                     }
                     else
@@ -648,20 +664,81 @@ internal static class Capturer
         return path;
     }
 
-    static string ForegroundAppName()
+    /// Nom (assaini pour servir de nom de dossier) et chemin de l'exe au premier plan.
+    /// name == null pour le bureau ou HDRSnap lui-meme : pas de sous-dossier dans ce cas.
+    static (string name, string exe) ForegroundApp()
     {
         try
         {
             IntPtr hwnd = Native.GetForegroundWindow();
-            if (hwnd == IntPtr.Zero) return null;
+            if (hwnd == IntPtr.Zero) return (null, null);
             Native.GetWindowThreadProcessId(hwnd, out uint pid);
             using var proc = Process.GetProcessById((int)pid);
             string name = proc.ProcessName;
-            if (name is "explorer" or "HDRSnap" or "" or null) return null;
+            if (name is "explorer" or "HDRSnap" or "" or null) return (null, null);
+            string exe = ExePath(pid);
             foreach (char c in Path.GetInvalidFileNameChars()) name = name.Replace(c, '_');
-            return name;
+            return (name, exe);
         }
-        catch { return null; }
+        catch { return (null, null); }
+    }
+
+    /// QueryFullProcessImageName plutot que MainModule : marche aussi sur les jeux
+    /// proteges (Denuvo, anti-triche) ou l'acces aux modules est refuse.
+    static string ExePath(uint pid)
+    {
+        IntPtr h = Native.OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+        if (h == IntPtr.Zero) return null;
+        try
+        {
+            var sb = new System.Text.StringBuilder(1024);
+            uint len = (uint)sb.Capacity;
+            return Native.QueryFullProcessImageName(h, 0, sb, ref len) ? sb.ToString() : null;
+        }
+        finally { Native.CloseHandle(h); }
+    }
+
+    /// Les Fullscreen Optimizations convertissent le plein ecran exclusif en flip compose
+    /// par le DWM : c'est ce qui rend la capture WGC possible en jeu. La case "desactiver
+    /// les optimisations du mode plein ecran" ecrit ce flag de compat, par exe.
+    static bool FsoDisabled(string exe)
+    {
+        if (string.IsNullOrEmpty(exe)) return false;
+        const string sub = @"Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Layers";
+        foreach (var root in new[] { Microsoft.Win32.Registry.CurrentUser, Microsoft.Win32.Registry.LocalMachine })
+        {
+            try
+            {
+                using var k = root.OpenSubKey(sub);
+                if (k?.GetValue(exe) is string v &&
+                    v.IndexOf("DISABLEDXMAXIMIZEDWINDOWEDMODE", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+            catch { }
+        }
+        return false;
+    }
+
+    /// Heuristique : en plein ecran *vraiment* exclusif, WGC rend le bureau compose
+    /// derriere le jeu, ecrete pile au blanc SDR. Si un jeu est au premier plan et que
+    /// rien ne depasse ce plafond, la capture est probablement le bureau, pas le jeu.
+    /// Faux positif possible sur une scene sombre entierement sous le blanc SDR : on
+    /// avertit sans bloquer, le PNG est enregistre normalement.
+    static void WarnIfLooksLikeDesktop(string fgName, string fgExe, float p9999Nits, float maxNits, float sdrNits)
+    {
+        if (fgName == null) return;                        // bureau au premier plan : normal
+        float tol = sdrNits * 0.005f;
+        if (Math.Abs(maxNits - sdrNits) > tol) return;     // ca depasse le blanc SDR : vraie frame de jeu
+        if (Math.Abs(p9999Nits - sdrNits) > tol) return;   // pas ecrete a plat
+
+        string msg = $"{fgName} est au premier plan mais la frame est ecretee pile au blanc SDR "
+                   + $"({sdrNits:0} nits) : c'est probablement le bureau et pas le jeu.";
+        msg += FsoDisabled(fgExe)
+            ? " Les optimisations du mode plein ecran sont DESACTIVEES pour cet exe :"
+              + " decoche 'Desactiver les optimisations du mode plein ecran' dans ses proprietes."
+            : " Passe le jeu en fenetre sans bordure.";
+        Program.Log("ATTENTION " + msg);
+        LastWarning = msg;
     }
 }
 
@@ -670,13 +747,19 @@ internal static class Capturer
 // ---------------------------------------------------------------------------
 internal class TrayApp : Form
 {
-    const int WM_HOTKEY = 0x0312;
-    const int HOTKEY_ID = 0xB00B;
-
     readonly Config _cfg;
     readonly NotifyIcon _tray;
     string _lastFile;
     bool _busy;
+
+    // Hotkey via hook clavier bas niveau plutot que RegisterHotKey : un jeu qui
+    // s'enregistre en raw input avec RIDEV_NOHOTKEYS (Pragmata) desactive tous les
+    // hotkeys applicatifs tant qu'il a le focus - RegisterHotKey reste « enregistree »
+    // mais WM_HOTKEY n'arrive jamais. Le hook, lui, est appele avant cette etape.
+    Native.LowLevelKeyboardProc _hookProc;
+    IntPtr _hook = IntPtr.Zero;
+    uint _hkMods, _hkVk;
+    bool _hkHeld;   // anti auto-repetition tant que la touche n'est pas relachee
 
     public TrayApp(Config cfg)
     {
@@ -703,37 +786,58 @@ internal class TrayApp : Form
                 Process.Start("explorer.exe", $"/select,\"{_lastFile}\"");
         };
 
-        if (!TryRegisterHotkey())
-        {
-            _tray.ShowBalloonTip(4000, "HDRSnap",
-                $"{cfg.Hotkey} est pris par une autre app — nouvel essai toutes les 5 s.", ToolTipIcon.Warning);
-            var retry = new System.Windows.Forms.Timer { Interval = 5000 };
-            retry.Tick += (_, _) =>
-            {
-                if (!TryRegisterHotkey()) return;
-                retry.Stop();
-                retry.Dispose();
-                _tray.ShowBalloonTip(2000, "HDRSnap", $"{_cfg.Hotkey} est maintenant actif.", ToolTipIcon.Info);
-            };
-            retry.Start();
-        }
+        InstallHook();
     }
 
-    bool TryRegisterHotkey()
+    void InstallHook()
     {
-        var (mods, vk) = _cfg.ParseHotkey();
-        bool ok = Native.RegisterHotKey(Handle, HOTKEY_ID, mods, vk);
-        Program.Log(ok ? $"hotkey {_cfg.Hotkey} enregistrée" : $"ERR hotkey {_cfg.Hotkey} indisponible (conflit)");
-        return ok;
+        (_hkMods, _hkVk) = _cfg.ParseHotkey();
+        _ = Handle;             // force la creation du handle (la fenetre reste invisible)
+        _hookProc = HookProc;   // reference gardee, sinon le GC collecte le delegue
+        _hook = Native.SetWindowsHookEx(13 /* WH_KEYBOARD_LL */, _hookProc, IntPtr.Zero, 0);
+        if (_hook == IntPtr.Zero)
+        {
+            Program.Log($"ERR hook clavier impossible (err {Marshal.GetLastWin32Error()})");
+            _tray.ShowBalloonTip(4000, "HDRSnap", "Impossible d'installer le hook clavier.", ToolTipIcon.Error);
+        }
+        else Program.Log($"hotkey {_cfg.Hotkey} actif (hook clavier bas niveau)");
+    }
+
+    IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam)
+    {
+        if (nCode >= 0)
+        {
+            int msg = (int)wParam;
+            uint vk = (uint)Marshal.ReadInt32(lParam);   // KBDLLHOOKSTRUCT.vkCode, 1er champ
+            if (vk == _hkVk)
+            {
+                if (msg == 0x0101 /* WM_KEYUP */ || msg == 0x0105 /* WM_SYSKEYUP */)
+                    _hkHeld = false;
+                else if ((msg == 0x0100 /* WM_KEYDOWN */ || msg == 0x0104 /* WM_SYSKEYDOWN */) && ModsMatch())
+                {
+                    if (!_hkHeld)
+                    {
+                        _hkHeld = true;
+                        // on rend la main tout de suite : Windows desactive un hook trop lent
+                        BeginInvoke(new Action(Shoot));
+                    }
+                    return (IntPtr)1;   // touche avalee, le jeu ne la voit pas
+                }
+            }
+        }
+        return Native.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
+    }
+
+    bool ModsMatch()
+    {
+        static bool Down(int vk) => (Native.GetAsyncKeyState(vk) & 0x8000) != 0;
+        return Down(0x11) == ((_hkMods & 0x2) != 0)                  // Ctrl
+            && Down(0x12) == ((_hkMods & 0x1) != 0)                  // Alt
+            && Down(0x10) == ((_hkMods & 0x4) != 0)                  // Shift
+            && (Down(0x5B) || Down(0x5C)) == ((_hkMods & 0x8) != 0); // Win
     }
 
     protected override void SetVisibleCore(bool value) => base.SetVisibleCore(false);
-
-    protected override void WndProc(ref Message m)
-    {
-        if (m.Msg == WM_HOTKEY && (int)m.WParam == HOTKEY_ID) Shoot();
-        else base.WndProc(ref m);
-    }
 
     void Shoot()
     {
@@ -748,7 +852,11 @@ internal class TrayApp : Form
                 _lastFile = path;
                 Program.Log($"OK {path}");
                 if (_cfg.PlaySound) System.Media.SystemSounds.Asterisk.Play();
-                _tray.ShowBalloonTip(1500, "Screenshot", Path.GetFileName(path), ToolTipIcon.Info);
+                string warn = Capturer.LastWarning;
+                if (warn != null)
+                    _tray.ShowBalloonTip(8000, "HDRSnap - capture douteuse", warn, ToolTipIcon.Warning);
+                else
+                    _tray.ShowBalloonTip(1500, "Screenshot", Path.GetFileName(path), ToolTipIcon.Info);
             }
             catch (Exception ex)
             {
@@ -769,7 +877,7 @@ internal class TrayApp : Form
     {
         if (disposing)
         {
-            Native.UnregisterHotKey(Handle, HOTKEY_ID);
+            if (_hook != IntPtr.Zero) { Native.UnhookWindowsHookEx(_hook); _hook = IntPtr.Zero; }
             _tray.Dispose();
         }
         base.Dispose(disposing);
