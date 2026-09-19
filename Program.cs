@@ -443,7 +443,7 @@ internal static class Capturer
     /// Luminance de la frame en unités scRGB (1.0 = 80 nits), NaN/Inf ignorés.
     /// p9999 = percentile 99,99 (MaxCLL robuste, comme le sample Microsoft) — un pixel
     /// parasite isolé ne doit pas dicter la courbe de tone mapping de toute l'image.
-    static unsafe (float p9999, float max) LuminanceStats(IntPtr data, int rowPitch, int w, int h)
+    internal static unsafe (float p9999, float max) LuminanceStats(IntPtr data, int rowPitch, int w, int h)
     {
         const int bins = 4096;
         const float range = 32f; // 0..32 scRGB = 0..2560 nits, au-delà -> dernier bin
@@ -559,7 +559,7 @@ internal static class Capturer
 
     // Fallback CPU : scRGB FP16 (linéaire, 1.0 = 80 nits) -> BGRA8 sRGB tone-mappé
     // (Reinhard étendu sur TOUTE la plage, blanc = maxY — plus de genou à 0.85)
-    static unsafe byte[] ToneMapScRgbToBgra(IntPtr data, int rowPitch, int w, int h, float sdrNits)
+    internal static unsafe byte[] ToneMapScRgbToBgra(IntPtr data, int rowPitch, int w, int h, float sdrNits)
     {
         float scale = 80f / Math.Max(sdrNits, 40f); // blanc SDR -> 1.0
         var rgb = new float[(long)w * h * 3];
@@ -581,7 +581,7 @@ internal static class Capturer
         return bgra;
     }
 
-    static unsafe float ReadHdrRow(byte* row, float[] rgb, int offset, int w, float scale)
+    internal static unsafe float ReadHdrRow(byte* row, float[] rgb, int offset, int w, float scale)
     {
         float localMax = 0f;
         Half* px = (Half*)row;
@@ -597,7 +597,7 @@ internal static class Capturer
         return localMax;
     }
 
-    static void EncodeRow(float[] rgb, byte[] bgra, int y, int w, bool tone, float invWhite2)
+    internal static void EncodeRow(float[] rgb, byte[] bgra, int y, int w, bool tone, float invWhite2)
     {
         int src = y * w * 3, dst = y * w * 4;
         for (int x = 0; x < w; x++)
@@ -620,7 +620,7 @@ internal static class Capturer
         }
     }
 
-    static byte SrgbByte(float c)
+    internal static byte SrgbByte(float c)
     {
         if (c <= 0f) return 0;
         if (c >= 1f) return 255;
@@ -628,7 +628,7 @@ internal static class Capturer
         return (byte)(s * 255f + 0.5f);
     }
 
-    static unsafe byte[] CopyBgra(IntPtr data, int rowPitch, int w, int h)
+    internal static unsafe byte[] CopyBgra(IntPtr data, int rowPitch, int w, int h)
     {
         var bgra = new byte[(long)w * h * 4];
         Parallel.For(0, h, y =>

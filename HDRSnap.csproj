@@ -10,11 +10,16 @@
     <AssemblyName>HDRSnap</AssemblyName>
     <RootNamespace>HDRSnap</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests/**;plans/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Vortice.Direct3D11" Version="3.*" />
     <PackageReference Include="Vortice.Direct2D1" Version="3.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="HDRSnap.Tests" />
   </ItemGroup>
 
 </Project>
