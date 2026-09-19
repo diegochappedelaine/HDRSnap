@@ -377,7 +377,7 @@ internal static class Capturer
                         // rien de significatif au-dessus du blanc SDR : simple remise à l'échelle
                         Program.Log($"plage SDR, pas de tone mapping (p99,99 = {maxRaw * 80f:0} nits, max = {absMax * 80f:0} nits)");
                         WarnIfLooksLikeDesktop(fgName, fgExe, maxRaw * 80f, absMax * 80f, sdrNits);
-                        bgra = ToneMapScRgbToBgra(map.DataPointer, (int)map.RowPitch, w, h, sdrNits);
+                        bgra = ToneMapScRgbToBgra(map.DataPointer, (int)map.RowPitch, w, h, sdrNits, 1f); // écrêtage, pas de Reinhard
                     }
                     else
                     {
@@ -390,8 +390,8 @@ internal static class Capturer
                         }
                         catch (Exception ex)
                         {
-                            Program.Log($"tone map D2D KO ({ex.Message}) -> fallback CPU Reinhard");
-                            bgra = ToneMapScRgbToBgra(map.DataPointer, (int)map.RowPitch, w, h, sdrNits);
+                            Program.Log($"tone map D2D KO ({ex.Message}) -> fallback CPU (blanc = p99,99 = {maxRaw * scale:0.00} x blanc SDR ; <= 1,005 => simple écrêtage)");
+                            bgra = ToneMapScRgbToBgra(map.DataPointer, (int)map.RowPitch, w, h, sdrNits, maxRaw * scale);
                         }
                     }
                 }
@@ -557,45 +557,38 @@ internal static class Capturer
         finally { _context.Unmap(staging, 0); }
     }
 
-    // Fallback CPU : scRGB FP16 (linéaire, 1.0 = 80 nits) -> BGRA8 sRGB tone-mappé
-    // (Reinhard étendu sur TOUTE la plage, blanc = maxY — plus de genou à 0.85)
-    internal static unsafe byte[] ToneMapScRgbToBgra(IntPtr data, int rowPitch, int w, int h, float sdrNits)
+    // Chemin CPU : scRGB FP16 (linéaire, 1.0 = 80 nits) -> BGRA8 sRGB.
+    // whiteY = blanc du Reinhard étendu, en unités de blanc SDR (1.0 = sdrNits).
+    // whiteY <= 1.005 => aucune compression, simple écrêtage à 1.0 (chemin « plage SDR »).
+    // L'appelant fournit le p99,99 (pas le max absolu) pour qu'un pixel isolé ne dicte
+    // pas la courbe de toute l'image.
+    internal static unsafe byte[] ToneMapScRgbToBgra(IntPtr data, int rowPitch, int w, int h, float sdrNits, float whiteY)
     {
         float scale = 80f / Math.Max(sdrNits, 40f); // blanc SDR -> 1.0
         var rgb = new float[(long)w * h * 3];
+        Parallel.For(0, h, y => ReadHdrRow((byte*)data + (long)y * rowPitch, rgb, y * w * 3, w, scale));
 
-        // passe 1 : conversion + luminance max
-        float maxY = 0f;
-        object lk = new();
-        Parallel.For(0, h,
-            () => 0f,
-            (y, _, localMax) => Math.Max(localMax, ReadHdrRow((byte*)data + (long)y * rowPitch, rgb, y * w * 3, w, scale)),
-            localMax => { lock (lk) maxY = Math.Max(maxY, localMax); });
-
-        // passe 2 : compression des hautes lumières + encodage sRGB
-        bool tone = maxY > 1.005f;
-        float invWhite2 = tone ? 1f / (maxY * maxY) : 0f;
+        bool tone = whiteY > 1.005f;
+        float invWhite2 = tone ? 1f / (whiteY * whiteY) : 0f;
 
         var bgra = new byte[(long)w * h * 4];
         Parallel.For(0, h, y => EncodeRow(rgb, bgra, y, w, tone, invWhite2));
         return bgra;
     }
 
-    internal static unsafe float ReadHdrRow(byte* row, float[] rgb, int offset, int w, float scale)
+    internal static unsafe void ReadHdrRow(byte* row, float[] rgb, int offset, int w, float scale)
     {
-        float localMax = 0f;
         Half* px = (Half*)row;
         for (int x = 0; x < w; x++)
         {
-            float r = Math.Max(0f, (float)px[x * 4 + 0]) * scale;
-            float g = Math.Max(0f, (float)px[x * 4 + 1]) * scale;
-            float b = Math.Max(0f, (float)px[x * 4 + 2]) * scale;
-            float y = 0.2126f * r + 0.7152f * g + 0.0722f * b;
-            if (y > localMax) localMax = y;
-            rgb[offset++] = r; rgb[offset++] = g; rgb[offset++] = b;
+            rgb[offset++] = Sane((float)px[x * 4 + 0]) * scale;
+            rgb[offset++] = Sane((float)px[x * 4 + 1]) * scale;
+            rgb[offset++] = Sane((float)px[x * 4 + 2]) * scale;
         }
-        return localMax;
     }
+
+    /// NaN -> 0, négatif -> 0, +Inf -> max d'un Half (65504, écrêté en blanc à l'encodage).
+    internal static float Sane(float v) => float.IsNaN(v) ? 0f : Math.Clamp(v, 0f, 65504f);
 
     internal static void EncodeRow(float[] rgb, byte[] bgra, int y, int w, bool tone, float invWhite2)
     {
@@ -608,7 +601,7 @@ internal static class Capturer
                 float lum = 0.2126f * r + 0.7152f * g + 0.0722f * b;
                 if (lum > 0f)
                 {
-                    // Reinhard étendu sur toute la plage : L' = L(1 + L/maxY²)/(1 + L)
+                    // Reinhard étendu sur toute la plage : L' = L(1 + L/whiteY²)/(1 + L)
                     float ratio = (1f + lum * invWhite2) / (1f + lum);
                     r *= ratio; g *= ratio; b *= ratio;
                 }

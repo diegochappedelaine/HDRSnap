@@ -98,9 +98,53 @@ public class PixelMathTests
     {
         const int w = 4, h = 2;
         var px = Solid(w, h, 1f, 1f, 1f);        // 1.0 scRGB = 80 nits = blanc SDR à 80 nits
-        var bgra = Pinned(px, p => Capturer.ToneMapScRgbToBgra(p, w * 8, w, h, sdrNits: 80f));
+        var bgra = Pinned(px, p => Capturer.ToneMapScRgbToBgra(p, w * 8, w, h, sdrNits: 80f, whiteY: 1f));
         Assert.All(bgra, b => Assert.Equal(255, b));
     }
+
+    [Fact]
+    public void ToneMapScRgbToBgra_sdr_branch_ignores_stray_bright_pixel()
+    {
+        // Régression : un pixel isolé à 3.0 ne doit plus assombrir le blanc à ~197.
+        const int w = 8, h = 8;
+        var px = Solid(w, h, 1f, 1f, 1f);
+        Set(px, w, 3, 3, 3f, 3f, 3f);
+        var bgra = Pinned(px, p => Capturer.ToneMapScRgbToBgra(p, w * 8, w, h, sdrNits: 80f, whiteY: 1f));
+        int stray = (3 * w + 3) * 4;
+        Assert.Equal(255, bgra[stray]);           // le pixel à 3.0 est écrêté à 255
+        for (int i = 0; i < bgra.Length; i++)
+            Assert.Equal(255, bgra[i]);           // et aucun autre pixel n'est assombri
+    }
+
+    [Fact]
+    public void ToneMapScRgbToBgra_reinhard_uses_given_white()
+    {
+        const int w = 4, h = 1;
+        var px = Solid(w, h, 1f, 1f, 1f);
+        var bgra = Pinned(px, p => Capturer.ToneMapScRgbToBgra(p, w * 8, w, h, sdrNits: 80f, whiteY: 3f));
+        Assert.InRange(bgra[0], 190, 205);        // même courbe que EncodeRow_with_tone_dims_white
+        Assert.Equal(255, bgra[3]);
+    }
+
+    [Fact]
+    public void ToneMapScRgbToBgra_sanitizes_nan_and_inf()
+    {
+        const int w = 3, h = 1;
+        var px = Solid(w, h, 1f, 1f, 1f);
+        Set(px, w, 0, 0, float.NaN, float.NaN, float.NaN);
+        Set(px, w, 1, 0, float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+        var bgra = Pinned(px, p => Capturer.ToneMapScRgbToBgra(p, w * 8, w, h, sdrNits: 80f, whiteY: 1f));
+        Assert.Equal(new byte[] { 0, 0, 0, 255 }, bgra[0..4]);          // NaN -> noir
+        Assert.Equal(new byte[] { 255, 255, 255, 255 }, bgra[4..8]);    // +Inf -> blanc
+        Assert.Equal(new byte[] { 255, 255, 255, 255 }, bgra[8..12]);   // voisin intact
+    }
+
+    [Theory]
+    [InlineData(float.NaN, 0f)]
+    [InlineData(-2f, 0f)]
+    [InlineData(0.5f, 0.5f)]
+    [InlineData(float.PositiveInfinity, 65504f)]
+    public void Sane_clamps(float input, float expected) => Assert.Equal(expected, Capturer.Sane(input));
 
     // ----- CopyBgra -----
 
