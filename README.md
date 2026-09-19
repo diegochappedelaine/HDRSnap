@@ -26,7 +26,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 ## Installation
 
 1. Copy `publish\HDRSnap.exe` anywhere you like (no installer needed).
-2. Run it once to generate the default config at `%APPDATA%\HDRSnap\config.json`.
+2. Run it once to generate the default config at `%APPDATA%\HDRSnap\config.json` (also reachable from the tray menu: *Modifier la configuration…*). Edits are applied on save, no restart needed.
 3. For autostart: drop a shortcut to the exe in `shell:startup`.
 
 ### Config (`%APPDATA%\HDRSnap\config.json`)

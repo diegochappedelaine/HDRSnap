@@ -125,4 +125,25 @@ public class ConfigTests : IDisposable
 
     [Fact]
     public void CopyToClipboard_defaults_to_true() => Assert.True(new Config().CopyToClipboard);
+
+    [Fact]
+    public void CopyFrom_copies_every_settable_property()
+    {
+        var src = new Config();
+        foreach (var p in typeof(Config).GetProperties().Where(p => p.CanWrite && !p.GetMethod.IsStatic))
+        {
+            object v = p.GetValue(src);
+            p.SetValue(src, v switch
+            {
+                bool b => !b,
+                string s => "x_" + s,
+                float f => f + 1f,
+                _ => throw new Exception($"type non géré dans le test : {p.Name} ({p.PropertyType})"),
+            });
+        }
+        var dst = new Config();
+        dst.CopyFrom(src);
+        foreach (var p in typeof(Config).GetProperties().Where(p => p.CanWrite && !p.GetMethod.IsStatic))
+            Assert.True(Equals(p.GetValue(src), p.GetValue(dst)), $"{p.Name} non copié");
+    }
 }

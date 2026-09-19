@@ -103,6 +103,14 @@ public class Config
         catch (Exception ex) { LastSaveError = ex.Message; return false; }
     }
 
+    /// Recopie toutes les valeurs (rechargement à chaud : TrayApp garde la même instance).
+    public void CopyFrom(Config o)
+    {
+        Hotkey = o.Hotkey; WindowHotkey = o.WindowHotkey; OutputDir = o.OutputDir;
+        CaptureCursor = o.CaptureCursor; PlaySound = o.PlaySound; CopyToClipboard = o.CopyToClipboard;
+        SubfolderPerApp = o.SubfolderPerApp; TonemapHeadroom = o.TonemapHeadroom;
+    }
+
     /// Valeurs nulles/vides (ex. "Hotkey": null dans le JSON) -> défauts.
     Config Sanitized()
     {
@@ -916,6 +924,10 @@ internal class TrayApp : Form
     HotkeyBinding[] _hotkeys = Array.Empty<HotkeyBinding>();   // [0] = écran (toujours), [1] = fenêtre (si activée)
     uint _heldVk;   // vk de la hotkey enfoncée (anti auto-répétition), 0 sinon
     IntPtr _fgBeforeMenu;   // fenêtre au premier plan juste avant l'ouverture du menu du tray
+    ToolStripMenuItem _miScreen, _miWindow;
+    FileSystemWatcher _watcher;
+    System.Windows.Forms.Timer _reloadDebounce;   // les éditeurs écrivent en plusieurs fois
+    int _reloadRetries;   // relectures déjà tentées sur un fichier verrouillé / incomplet
     // Windows retire un hook LL sans prévenir s'il dépasse LowLevelHooksTimeout
     // (pause GC, thread UI occupé pendant un appui). Aucune API ne permet de le
     // savoir : on le réinstalle périodiquement, sur le thread UI.
@@ -932,14 +944,16 @@ internal class TrayApp : Form
         foreach (var w in hkWarnings) Program.Log("ERR " + w);
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add($"Capturer l'écran ({_hotkeys[0].Label})", null, (_, _) => Shoot(CaptureMode.Monitor));
-        if (_hotkeys.Length > 1)
-            // _fgBeforeMenu : à l'ouverture du menu, WinForms met AU PREMIER PLAN une fenêtre
-            // cachée de HDRSnap (sinon le menu ne se referme pas), donc GetForegroundWindow au
-            // moment du clic rendrait notre propre fenêtre. On réutilise celle notée au clic.
-            menu.Items.Add($"Capturer la fenêtre ({_hotkeys[1].Label})", null, (_, _) => Shoot(CaptureMode.Window, _fgBeforeMenu));
+        _miScreen = new ToolStripMenuItem("", null, (_, _) => Shoot(CaptureMode.Monitor));
+        // _fgBeforeMenu : à l'ouverture du menu, WinForms met AU PREMIER PLAN une fenêtre
+        // cachée de HDRSnap (sinon le menu ne se referme pas), donc GetForegroundWindow au
+        // moment du clic rendrait notre propre fenêtre. On réutilise celle notée au clic.
+        _miWindow = new ToolStripMenuItem("", null, (_, _) => Shoot(CaptureMode.Window, _fgBeforeMenu));
+        menu.Items.Add(_miScreen);
+        menu.Items.Add(_miWindow);
         menu.Items.Add("Ouvrir le dossier", null, (_, _) => OpenFolder());
         menu.Items.Add("Choisir le dossier de sortie…", null, (_, _) => ChooseFolder());
+        menu.Items.Add("Modifier la configuration…", null, (_, _) => OpenConfigFile());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quitter", null, (_, _) => { _tray.Visible = false; Application.Exit(); });
 
@@ -951,6 +965,7 @@ internal class TrayApp : Form
             ContextMenuStrip = menu,
         };
         // Noté au clic : à cet instant la fenêtre de l'utilisateur est encore au premier plan.
+        RefreshHotkeyLabels();
         _tray.MouseDown += (_, _) => _fgBeforeMenu = Native.GetForegroundWindow();
         _tray.DoubleClick += (_, _) => OpenFolder();
         _tray.BalloonTipClicked += (_, _) =>
@@ -969,6 +984,71 @@ internal class TrayApp : Form
         _rehook = new System.Windows.Forms.Timer { Interval = 60_000 };
         _rehook.Tick += (_, _) => ReinstallHook();
         _rehook.Start();
+
+        _reloadDebounce = new System.Windows.Forms.Timer { Interval = 500 };
+        _reloadDebounce.Tick += (_, _) => { _reloadDebounce.Stop(); ReloadConfig(); };
+        try
+        {
+            Directory.CreateDirectory(Config.Dir);
+            _watcher = new FileSystemWatcher(Config.Dir, "config.json")
+            {
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.Size,
+            };
+            _watcher.Changed += OnConfigFileChanged;
+            _watcher.Created += OnConfigFileChanged;
+            _watcher.Renamed += OnConfigFileChanged;
+            _watcher.EnableRaisingEvents = true;
+        }
+        catch (Exception ex) { Program.Log($"surveillance de config.json impossible ({ex.Message})"); }
+    }
+
+    void OnConfigFileChanged(object sender, FileSystemEventArgs e)
+    {
+        // événement sur un thread du pool -> retour au thread UI, puis anti-rebond.
+        // La fenêtre peut être détruite entre le test et l'appel (quit pendant une
+        // écriture) : sans catch, l'exception tuerait le process sur un thread du pool.
+        try
+        {
+            if (IsHandleCreated) BeginInvoke(new Action(() => { _reloadDebounce.Stop(); _reloadDebounce.Start(); }));
+        }
+        catch (ObjectDisposedException) { }
+        catch (InvalidOperationException) { }
+    }
+
+    void ReloadConfig()
+    {
+        // Beaucoup d'éditeurs enregistrent en atomique (temporaire puis renommage) : le
+        // fichier disparaît un instant. Config.Load() en profiterait pour ÉCRIRE des
+        // défauts et on les appliquerait. On ne fait rien : l'événement du renommage suivra.
+        if (!File.Exists(Config.FilePath)) return;
+
+        var fresh = Config.Load();
+        if (Config.LoadWarning != null)
+        {
+            // Fichier peut-être encore verrouillé ou écrit à moitié : on retente avant de crier.
+            if (_reloadRetries++ < 2) { _reloadDebounce.Start(); return; }
+            _reloadRetries = 0;
+            Program.Log("ATTENTION " + Config.LoadWarning);
+            // Ce qui est sur le disque n'est plus ce qu'on a lu : un Save() devra le sauvegarder.
+            _cfg.LoadedFromFile = false;
+            _tray.ShowBalloonTip(5000, "HDRSnap — config non rechargée", Config.LoadWarning, ToolTipIcon.Warning);
+            return;                                  // on garde les réglages précédents
+        }
+        _reloadRetries = 0;
+        // nos propres Save() (ChooseFolder) et les événements en double : rien à faire si identique
+        if (JsonSerializer.Serialize(fresh) == JsonSerializer.Serialize(_cfg)) return;
+
+        _cfg.CopyFrom(fresh);
+        _cfg.LoadedFromFile = true;   // nos valeurs viennent bien du fichier actuel
+        var (table, warnings) = BuildHotkeys(_cfg);
+        _hotkeys = table;
+        foreach (var w in warnings) Program.Log("ERR " + w);
+        RefreshHotkeyLabels();
+        ReinstallHook();
+        Program.Log($"config rechargée (hotkeys {string.Join(", ", _hotkeys.Select(h => h.Label))}, dossier {_cfg.OutputDir})");
+        _tray.ShowBalloonTip(2500, "HDRSnap",
+            warnings.Count > 0 ? string.Join("\n", warnings) : $"Configuration rechargée — {_hotkeys[0].Label}",
+            warnings.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info);
     }
 
     void InstallHook()
@@ -1123,6 +1203,31 @@ internal class TrayApp : Form
         });
     }
 
+    void RefreshHotkeyLabels()
+    {
+        _miScreen.Text = $"Capturer l'écran ({_hotkeys[0].Label})";
+        // Available, pas Visible : le getter de Visible vaut false tant que le menu n'est
+        // pas déroulé, donc s'en servir comme condition laisserait l'entrée sans libellé.
+        bool hasWindowHotkey = _hotkeys.Length > 1;
+        _miWindow.Available = hasWindowHotkey;
+        if (hasWindowHotkey) _miWindow.Text = $"Capturer la fenêtre ({_hotkeys[1].Label})";
+        _tray.Text = $"HDRSnap — {_hotkeys[0].Label}";
+    }
+
+    void OpenConfigFile()
+    {
+        try
+        {
+            if (!File.Exists(Config.FilePath)) _cfg.Save();
+            Process.Start(new ProcessStartInfo(Config.FilePath) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Program.Log($"ouverture config KO ({ex.Message}) -> dossier");
+            Process.Start("explorer.exe", $"/select,\"{Config.FilePath}\"");
+        }
+    }
+
     void OpenFolder()
     {
         Directory.CreateDirectory(_cfg.OutputDir);
@@ -1189,6 +1294,8 @@ internal class TrayApp : Form
         if (disposing)
         {
             _rehook?.Dispose();
+            _watcher?.Dispose();
+            _reloadDebounce?.Dispose();
             if (_hook != IntPtr.Zero) { Native.UnhookWindowsHookEx(_hook); _hook = IntPtr.Zero; }
             _tray.Dispose();
         }
