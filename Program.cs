@@ -19,6 +19,8 @@ namespace HDRSnap;
 public class Config
 {
     public string Hotkey { get; set; } = "F11";
+    /// Raccourci pour capturer uniquement la fenêtre au premier plan ("" = désactivé).
+    public string WindowHotkey { get; set; } = "Ctrl+F11";
     public string OutputDir { get; set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "HDRSnap");
     public bool CaptureCursor { get; set; } = false;
@@ -106,18 +108,22 @@ public class Config
     {
         if (string.IsNullOrWhiteSpace(Hotkey)) Hotkey = "F11";
         if (string.IsNullOrWhiteSpace(OutputDir)) OutputDir = new Config().OutputDir;
+        WindowHotkey ??= "";   // null = désactivé, pas un plantage
         return this;
     }
 
     /// "Ctrl+Shift+F11" -> (mods, vk). Bits de mods : Alt=1, Ctrl=2, Shift=4, Win=8
-    /// (mêmes valeurs que MOD_* de RegisterHotKey, lues par TrayApp.ModsMatch).
+    /// (mêmes valeurs que MOD_* de RegisterHotKey, comparées par TrayApp.FindHotkey).
     /// false + message si aucune touche, plusieurs touches, ou nom de touche inconnu
     /// (noms = membres de System.Windows.Forms.Keys, insensibles à la casse).
     public bool TryParseHotkey(out uint mods, out uint vk, out string error)
+        => TryParseHotkey(Hotkey, out mods, out vk, out error);
+
+    public static bool TryParseHotkey(string text, out uint mods, out uint vk, out string error)
     {
         mods = 0; vk = 0; error = null;
         Keys? key = null;
-        foreach (var raw in (Hotkey ?? "").Split('+'))
+        foreach (var raw in (text ?? "").Split('+'))
         {
             var part = raw.Trim();
             if (part.Length == 0) continue;
@@ -168,6 +174,7 @@ internal static class Native
     public static extern bool QueryFullProcessImageName(IntPtr hProc, uint flags, System.Text.StringBuilder buf, ref uint size);
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT pt);
     [DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
+    [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetMonitorInfoW(IntPtr hMonitor, ref MONITORINFOEX mi);
@@ -345,6 +352,8 @@ internal interface IDirect3DDxgiInterfaceAccess
 // ---------------------------------------------------------------------------
 // Capture
 // ---------------------------------------------------------------------------
+public enum CaptureMode { Monitor, Window }
+
 internal static class Capturer
 {
     static ID3D11Device _device;
@@ -397,22 +406,26 @@ internal static class Capturer
         _d2d = null; _d2dDevice = null; _winrtDevice = null; _context = null; _device = null;
     }
 
-    public static string CaptureToFile(Config cfg)
+    /// hwnd : fenêtre à capturer en mode Window ; IntPtr.Zero = celle au premier plan.
+    public static string CaptureToFile(Config cfg, CaptureMode mode = CaptureMode.Monitor, IntPtr hwnd = default)
     {
-        try { return CaptureToFileCore(cfg); }
+        try { return CaptureToFileCore(cfg, mode, hwnd); }
         catch (Exception ex) when (IsDeviceError(ex))
         {
             // device perdu (TDR / mise à jour pilote) : reset et 2e tentative
             Program.Log($"capture KO ({ex.GetType().Name} : {ex.Message}) -> reset device, 2e tentative");
             ResetDevice();
-            return CaptureToFileCore(cfg);
+            return CaptureToFileCore(cfg, mode, hwnd);
         }
-        catch (TimeoutException)
+        catch (TimeoutException) when (mode == CaptureMode.Monitor)
         {
             // Après un TDR, WGC cesse souvent de livrer des frames sans lever d'erreur COM.
             // Le device est gardé en statique : sans reset il resterait mort pour TOUTES
             // les captures suivantes. On le jette, mais sans relancer la capture (pas de
             // seconde attente de 3 s) : la frappe suivante repartira sur un device neuf.
+            // Réservé à l'écran : une fenêtre non capturable (WDA_EXCLUDEFROMCAPTURE, fenêtre
+            // élevée) ne livre jamais de frame sans que le device soit en cause, et détruire
+            // le device partagé pénaliserait toutes les captures suivantes.
             Program.Log("capture KO (timeout) -> reset device, pas de 2e tentative");
             ResetDevice();
             throw;
@@ -424,21 +437,33 @@ internal static class Capturer
     internal static bool IsDeviceError(Exception ex) =>
         ex is SharpGen.Runtime.SharpGenException || ex is COMException;
 
-    static string CaptureToFileCore(Config cfg)
+    static string CaptureToFileCore(Config cfg, CaptureMode mode, IntPtr hwnd = default)
     {
         LastWarning = null;
         var (fgName, fgExe) = ForegroundApp();
         string appName = cfg.SubfolderPerApp ? fgName : null;
 
-        Native.GetCursorPos(out var pt);
-        IntPtr hmon = Native.MonitorFromPoint(pt, 2 /* MONITOR_DEFAULTTONEAREST */);
+        IntPtr hwndTarget = IntPtr.Zero, hmon;
+        if (mode == CaptureMode.Window)
+        {
+            // hwnd fourni par l'appelant (menu du tray) sinon la fenêtre au premier plan (hotkey).
+            hwndTarget = hwnd != IntPtr.Zero ? hwnd : Native.GetForegroundWindow();
+            if (hwndTarget == IntPtr.Zero) throw new InvalidOperationException("Aucune fenêtre au premier plan.");
+            hmon = Native.MonitorFromWindow(hwndTarget, 2 /* MONITOR_DEFAULTTONEAREST */);
+        }
+        else
+        {
+            Native.GetCursorPos(out var pt);
+            hmon = Native.MonitorFromPoint(pt, 2 /* MONITOR_DEFAULTTONEAREST */);
+        }
 
         bool hdr = IsMonitorHdr(hmon);
         var (sdrNits, sdrSrc) = hdr ? Native.GetSdrWhite(hmon) : (200f, "n/a");
-        Program.Log(hdr ? $"capture HDR (blanc SDR = {sdrNits:0} nits, source : {sdrSrc})" : "capture SDR");
+        string what = mode == CaptureMode.Window ? "capture fenêtre" : "capture écran";
+        Program.Log(hdr ? $"{what} HDR (blanc SDR = {sdrNits:0} nits, source : {sdrSrc})" : $"{what} SDR");
 
         EnsureDevice();
-        var item = CreateItemForMonitor(hmon);
+        var item = mode == CaptureMode.Window ? CreateItemForWindow(hwndTarget) : CreateItemForMonitor(hmon);
 
         var pixFmt = hdr ? DirectXPixelFormat.R16G16B16A16Float : DirectXPixelFormat.B8G8R8A8UIntNormalized;
         using var pool = Direct3D11CaptureFramePool.CreateFreeThreaded(_winrtDevice, pixFmt, 2, item.Size);
@@ -497,7 +522,9 @@ internal static class Capturer
                     {
                         // rien de significatif au-dessus du blanc SDR : simple remise à l'échelle
                         Program.Log($"plage SDR, pas de tone mapping (p99,99 = {maxRaw * 80f:0} nits, max = {absMax * 80f:0} nits)");
-                        WarnIfLooksLikeDesktop(fgName, fgExe, maxRaw * 80f, absMax * 80f, sdrNits);
+                        // heuristique valable pour une capture écran seulement
+                        if (mode == CaptureMode.Monitor)
+                            WarnIfLooksLikeDesktop(fgName, fgExe, maxRaw * 80f, absMax * 80f, sdrNits);
                         bgra = ToneMapScRgbToBgra(map.DataPointer, (int)map.RowPitch, w, h, sdrNits, 1f); // écrêtage, pas de Reinhard
                     }
                     else
@@ -524,6 +551,15 @@ internal static class Capturer
     }
 
     // --- WinRT / DXGI helpers ---
+
+    static GraphicsCaptureItem CreateItemForWindow(IntPtr hwnd)
+    {
+        var interop = GraphicsCaptureItem.As<IGraphicsCaptureItemInterop>();
+        var iid = new Guid("79C3F95B-31F7-4EC2-A464-632EF5D30760"); // IGraphicsCaptureItem
+        IntPtr abi = interop.CreateForWindow(hwnd, ref iid);
+        try { return GraphicsCaptureItem.FromAbi(abi); }
+        finally { Marshal.Release(abi); }
+    }
 
     static GraphicsCaptureItem CreateItemForMonitor(IntPtr hmon)
     {
@@ -876,29 +912,32 @@ internal class TrayApp : Form
     // mais WM_HOTKEY n'arrive jamais. Le hook, lui, est appele avant cette etape.
     Native.LowLevelKeyboardProc _hookProc;
     IntPtr _hook = IntPtr.Zero;
-    uint _hkMods, _hkVk;
-    bool _hkHeld;   // anti auto-repetition tant que la touche n'est pas relachee
+    internal readonly record struct HotkeyBinding(uint Mods, uint Vk, string Label, CaptureMode Mode);
+    HotkeyBinding[] _hotkeys = Array.Empty<HotkeyBinding>();   // [0] = écran (toujours), [1] = fenêtre (si activée)
+    uint _heldVk;   // vk de la hotkey enfoncée (anti auto-répétition), 0 sinon
+    IntPtr _fgBeforeMenu;   // fenêtre au premier plan juste avant l'ouverture du menu du tray
     // Windows retire un hook LL sans prévenir s'il dépasse LowLevelHooksTimeout
     // (pause GC, thread UI occupé pendant un appui). Aucune API ne permet de le
     // savoir : on le réinstalle périodiquement, sur le thread UI.
     System.Windows.Forms.Timer _rehook;
     bool _rearmFailed;   // évite de journaliser la même panne de réarmement chaque minute
-    string _hkLabel;   // texte affiché (hotkey config, ou "F11" après repli)
 
     public TrayApp(Config cfg)
     {
         _cfg = cfg;
         ShowInTaskbar = false;
 
-        if (!_cfg.TryParseHotkey(out _hkMods, out _hkVk, out string hkError))
-        {
-            _hkMods = 0; _hkVk = (uint)Keys.F11;
-            Program.Log($"ERR hotkey « {_cfg.Hotkey} » invalide ({hkError}) -> repli sur F11");
-        }
-        _hkLabel = hkError == null ? _cfg.Hotkey : "F11";
+        var (table, hkWarnings) = BuildHotkeys(_cfg);
+        _hotkeys = table;
+        foreach (var w in hkWarnings) Program.Log("ERR " + w);
 
         var menu = new ContextMenuStrip();
-        menu.Items.Add($"Capturer ({_hkLabel})", null, (_, _) => Shoot());
+        menu.Items.Add($"Capturer l'écran ({_hotkeys[0].Label})", null, (_, _) => Shoot(CaptureMode.Monitor));
+        if (_hotkeys.Length > 1)
+            // _fgBeforeMenu : à l'ouverture du menu, WinForms met AU PREMIER PLAN une fenêtre
+            // cachée de HDRSnap (sinon le menu ne se referme pas), donc GetForegroundWindow au
+            // moment du clic rendrait notre propre fenêtre. On réutilise celle notée au clic.
+            menu.Items.Add($"Capturer la fenêtre ({_hotkeys[1].Label})", null, (_, _) => Shoot(CaptureMode.Window, _fgBeforeMenu));
         menu.Items.Add("Ouvrir le dossier", null, (_, _) => OpenFolder());
         menu.Items.Add("Choisir le dossier de sortie…", null, (_, _) => ChooseFolder());
         menu.Items.Add(new ToolStripSeparator());
@@ -907,10 +946,12 @@ internal class TrayApp : Form
         _tray = new NotifyIcon
         {
             Icon = SystemIcons.Application,
-            Text = $"HDRSnap — {_hkLabel}",
+            Text = $"HDRSnap — {_hotkeys[0].Label}",
             Visible = true,
             ContextMenuStrip = menu,
         };
+        // Noté au clic : à cet instant la fenêtre de l'utilisateur est encore au premier plan.
+        _tray.MouseDown += (_, _) => _fgBeforeMenu = Native.GetForegroundWindow();
         _tray.DoubleClick += (_, _) => OpenFolder();
         _tray.BalloonTipClicked += (_, _) =>
         {
@@ -920,9 +961,8 @@ internal class TrayApp : Form
 
         // Avant InstallHook : le shell n'affiche qu'un ballon à la fois par icône, et
         // l'échec du hook (aucun hotkey ne marche) prime sur le repli F11.
-        if (hkError != null)
-            _tray.ShowBalloonTip(6000, "HDRSnap — hotkey invalide",
-                $"« {_cfg.Hotkey} » : {hkError}. Repli sur F11. Corrige {Config.FilePath}.", ToolTipIcon.Warning);
+        if (hkWarnings.Count > 0)
+            _tray.ShowBalloonTip(6000, "HDRSnap — hotkey", string.Join("\n", hkWarnings), ToolTipIcon.Warning);
 
         InstallHook();
 
@@ -941,14 +981,14 @@ internal class TrayApp : Form
             Program.Log($"ERR hook clavier impossible (err {Marshal.GetLastWin32Error()})");
             _tray.ShowBalloonTip(4000, "HDRSnap", "Impossible d'installer le hook clavier.", ToolTipIcon.Error);
         }
-        else Program.Log($"hotkey {_hkLabel} actif (hook clavier bas niveau)");
+        else Program.Log($"hotkeys actives : {string.Join(", ", _hotkeys.Select(h => $"{h.Label} ({h.Mode})"))} (hook clavier bas niveau)");
     }
 
     void ReinstallHook()
     {
         // Installer AVANT de retirer : un échec passager de SetWindowsHookEx ne doit pas
         // détruire un hook qui fonctionnait. Les deux coexistent un instant, sans risque
-        // de double capture (même délégué, et _hkHeld bloque le second appel).
+        // de double capture (même délégué, et _heldVk bloque le second appel).
         IntPtr fresh = Native.SetWindowsHookEx(13 /* WH_KEYBOARD_LL */, _hookProc, IntPtr.Zero, 0);
         if (fresh == IntPtr.Zero)
         {
@@ -963,8 +1003,8 @@ internal class TrayApp : Form
         if (_hook != IntPtr.Zero) Native.UnhookWindowsHookEx(_hook);
         _hook = fresh;
         // Si le hook est tombé alors que la touche était enfoncée, le KEYUP s'est perdu
-        // et _hkHeld resterait vrai : la frappe suivante serait avalée sans capturer.
-        _hkHeld = false;
+        // et _heldVk resterait positionné : la frappe suivante serait avalée sans capturer.
+        _heldVk = 0;
         if (_rearmFailed)
         {
             _rearmFailed = false;
@@ -978,37 +1018,79 @@ internal class TrayApp : Form
         {
             int msg = (int)wParam;
             uint vk = (uint)Marshal.ReadInt32(lParam);   // KBDLLHOOKSTRUCT.vkCode, 1er champ
-            if (vk == _hkVk)
+            if (msg == 0x0101 /* WM_KEYUP */ || msg == 0x0105 /* WM_SYSKEYUP */)
             {
-                if (msg == 0x0101 /* WM_KEYUP */ || msg == 0x0105 /* WM_SYSKEYUP */)
-                    _hkHeld = false;
-                else if ((msg == 0x0100 /* WM_KEYDOWN */ || msg == 0x0104 /* WM_SYSKEYDOWN */) && ModsMatch())
+                if (vk == _heldVk) _heldVk = 0;
+            }
+            else if (msg == 0x0100 /* WM_KEYDOWN */ || msg == 0x0104 /* WM_SYSKEYDOWN */)
+            {
+                int i = FindHotkey(_hotkeys, vk, CurrentMods());
+                if (i >= 0)
                 {
-                    if (!_hkHeld)
+                    if (_heldVk != vk)
                     {
-                        _hkHeld = true;
-                        // on rend la main tout de suite : Windows desactive un hook trop lent
-                        BeginInvoke(new Action(Shoot));
+                        _heldVk = vk;
+                        var mode = _hotkeys[i].Mode;
+                        // on rend la main tout de suite : Windows désactive un hook trop lent
+                        BeginInvoke(new Action(() => Shoot(mode)));
                     }
-                    return (IntPtr)1;   // touche avalee, le jeu ne la voit pas
+                    return (IntPtr)1;   // touche avalée, le jeu ne la voit pas
                 }
             }
         }
         return Native.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
     }
 
-    bool ModsMatch()
+    /// Table des hotkeys depuis la config. Hotkey invalide -> repli F11 ;
+    /// WindowHotkey invalide ou identique à Hotkey -> capture fenêtre désactivée.
+    internal static (HotkeyBinding[] table, List<string> warnings) BuildHotkeys(Config cfg)
+    {
+        var warnings = new List<string>();
+        var list = new List<HotkeyBinding>();
+
+        if (Config.TryParseHotkey(cfg.Hotkey, out uint mods, out uint vk, out string err))
+            list.Add(new HotkeyBinding(mods, vk, cfg.Hotkey, CaptureMode.Monitor));
+        else
+        {
+            warnings.Add($"hotkey « {cfg.Hotkey} » invalide ({err}) -> repli sur F11");
+            list.Add(new HotkeyBinding(0, (uint)Keys.F11, "F11", CaptureMode.Monitor));
+        }
+
+        if (!string.IsNullOrWhiteSpace(cfg.WindowHotkey))
+        {
+            if (!Config.TryParseHotkey(cfg.WindowHotkey, out uint wm, out uint wv, out string werr))
+                warnings.Add($"WindowHotkey « {cfg.WindowHotkey} » invalide ({werr}) -> capture fenêtre désactivée");
+            else if (wm == list[0].Mods && wv == list[0].Vk)
+                warnings.Add($"WindowHotkey identique à Hotkey ({cfg.WindowHotkey}) -> capture fenêtre désactivée");
+            else
+                list.Add(new HotkeyBinding(wm, wv, cfg.WindowHotkey, CaptureMode.Window));
+        }
+        return (list.ToArray(), warnings);
+    }
+
+    /// Bits des modificateurs enfoncés, mêmes valeurs que Config.TryParseHotkey (Alt=1, Ctrl=2, Shift=4, Win=8).
+    static uint CurrentMods()
     {
         static bool Down(int vk) => (Native.GetAsyncKeyState(vk) & 0x8000) != 0;
-        return Down(0x11) == ((_hkMods & 0x2) != 0)                  // Ctrl
-            && Down(0x12) == ((_hkMods & 0x1) != 0)                  // Alt
-            && Down(0x10) == ((_hkMods & 0x4) != 0)                  // Shift
-            && (Down(0x5B) || Down(0x5C)) == ((_hkMods & 0x8) != 0); // Win
+        uint m = 0;
+        if (Down(0x12)) m |= 0x1;                // Alt
+        if (Down(0x11)) m |= 0x2;                // Ctrl
+        if (Down(0x10)) m |= 0x4;                // Shift
+        if (Down(0x5B) || Down(0x5C)) m |= 0x8;  // Win
+        return m;
+    }
+
+    /// Index de la hotkey dont la touche ET les modificateurs correspondent exactement, -1 sinon.
+    internal static int FindHotkey(HotkeyBinding[] table, uint vk, uint modsDown)
+    {
+        for (int i = 0; i < table.Length; i++)
+            if (table[i].Vk == vk && table[i].Mods == modsDown) return i;
+        return -1;
     }
 
     protected override void SetVisibleCore(bool value) => base.SetVisibleCore(false);
 
-    void Shoot()
+    void Shoot(CaptureMode mode, IntPtr hwnd = default)
     {
         if (_busy) return;
         _busy = true;
@@ -1017,7 +1099,7 @@ internal class TrayApp : Form
         {
             try
             {
-                string path = Capturer.CaptureToFile(_cfg);
+                string path = Capturer.CaptureToFile(_cfg, mode, hwnd);
                 _lastFile = path;
                 Program.Log($"OK {path}");
                 // Le son d'abord : retour immédiat, sans attendre le presse-papiers.
@@ -1138,7 +1220,7 @@ internal static class Program
 
         if (args.Contains("--shoot"))
         {
-            try { Log("OK " + Capturer.CaptureToFile(cfg)); }
+            try { Log("OK " + Capturer.CaptureToFile(cfg, args.Contains("--window") ? CaptureMode.Window : CaptureMode.Monitor)); }
             catch (Exception ex) { Log("ERR " + ex); Environment.ExitCode = 1; }
             return;
         }

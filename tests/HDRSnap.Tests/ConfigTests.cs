@@ -81,10 +81,11 @@ public class ConfigTests : IDisposable
     [Fact]
     public void Save_then_Load_round_trips()
     {
-        var cfg = new Config { Hotkey = "Ctrl+F12", OutputDir = @"D:\Shots", PlaySound = false, TonemapHeadroom = 2f, CopyToClipboard = false };
+        var cfg = new Config { Hotkey = "Ctrl+F12", WindowHotkey = "Alt+F11", OutputDir = @"D:\Shots", PlaySound = false, TonemapHeadroom = 2f, CopyToClipboard = false };
         Assert.True(cfg.Save(CfgPath));
         var back = Config.Load(CfgPath);
         Assert.Equal("Ctrl+F12", back.Hotkey);
+        Assert.Equal("Alt+F11", back.WindowHotkey);
         Assert.Equal(@"D:\Shots", back.OutputDir);
         Assert.False(back.PlaySound);
         Assert.Equal(2f, back.TonemapHeadroom);
