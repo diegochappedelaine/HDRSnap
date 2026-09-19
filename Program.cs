@@ -352,10 +352,16 @@ internal static class Capturer
         _d2d = _d2dDevice.CreateDeviceContext(DeviceContextOptions.None);
     }
 
-    static void ResetDevice()
+    static void ResetD2D()
     {
         try { _d2d?.Dispose(); } catch { }
         try { _d2dDevice?.Dispose(); } catch { }
+        _d2d = null; _d2dDevice = null;
+    }
+
+    static void ResetDevice()
+    {
+        ResetD2D();
         try { _winrtDevice?.Dispose(); } catch { }
         try { _context?.Dispose(); } catch { }
         try { _device?.Dispose(); } catch { }
@@ -365,13 +371,29 @@ internal static class Capturer
     public static string CaptureToFile(Config cfg)
     {
         try { return CaptureToFileCore(cfg); }
-        catch
+        catch (Exception ex) when (IsDeviceError(ex))
         {
-            // reset device (TDR / driver update) et 2e tentative
+            // device perdu (TDR / mise à jour pilote) : reset et 2e tentative
+            Program.Log($"capture KO ({ex.GetType().Name} : {ex.Message}) -> reset device, 2e tentative");
             ResetDevice();
             return CaptureToFileCore(cfg);
         }
+        catch (TimeoutException)
+        {
+            // Après un TDR, WGC cesse souvent de livrer des frames sans lever d'erreur COM.
+            // Le device est gardé en statique : sans reset il resterait mort pour TOUTES
+            // les captures suivantes. On le jette, mais sans relancer la capture (pas de
+            // seconde attente de 3 s) : la frappe suivante repartira sur un device neuf.
+            Program.Log("capture KO (timeout) -> reset device, pas de 2e tentative");
+            ResetDevice();
+            throw;
+        }
     }
+
+    /// Seules les erreurs D3D/DXGI/WinRT justifient un reset du device + retry.
+    /// Timeout de frame, E/S disque, chemin invalide : on échoue tout de suite.
+    internal static bool IsDeviceError(Exception ex) =>
+        ex is SharpGen.Runtime.SharpGenException || ex is COMException;
 
     static string CaptureToFileCore(Config cfg)
     {
@@ -460,6 +482,7 @@ internal static class Capturer
                         }
                         catch (Exception ex)
                         {
+                            ResetD2D();   // le device D2D peut être coincé : EnsureD2D le recréera
                             Program.Log($"tone map D2D KO ({ex.Message}) -> fallback CPU (blanc = p99,99 = {maxRaw * scale:0.00} x blanc SDR ; <= 1,005 => simple écrêtage)");
                             bgra = ToneMapScRgbToBgra(map.DataPointer, (int)map.RowPitch, w, h, sdrNits, maxRaw * scale);
                         }
@@ -600,11 +623,14 @@ internal static class Capturer
         toneMap.SetInput(0, srcBmp, true);
 
         _d2d.Target = dstBmp;
-        _d2d.BeginDraw();
-        _d2d.Clear(new Vortice.Mathematics.Color4(0f, 0f, 0f, 1f));
-        _d2d.DrawImage(toneMap.Output);
-        _d2d.EndDraw();
-        _d2d.Target = null;
+        try
+        {
+            _d2d.BeginDraw();
+            _d2d.Clear(new Vortice.Mathematics.Color4(0f, 0f, 0f, 1f));
+            _d2d.DrawImage(toneMap.Output);
+            _d2d.EndDraw().CheckError();
+        }
+        finally { _d2d.Target = null; }   // sinon la cible pointe sur un bitmap disposé
 
         // lecture CPU + encodage sRGB (le blanc de sortie du tonemap = targetNits -> 1.0)
         texDesc.BindFlags = BindFlags.None;
