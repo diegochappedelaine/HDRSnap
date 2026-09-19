@@ -81,13 +81,14 @@ public class ConfigTests : IDisposable
     [Fact]
     public void Save_then_Load_round_trips()
     {
-        var cfg = new Config { Hotkey = "Ctrl+F12", OutputDir = @"D:\Shots", PlaySound = false, TonemapHeadroom = 2f };
+        var cfg = new Config { Hotkey = "Ctrl+F12", OutputDir = @"D:\Shots", PlaySound = false, TonemapHeadroom = 2f, CopyToClipboard = false };
         Assert.True(cfg.Save(CfgPath));
         var back = Config.Load(CfgPath);
         Assert.Equal("Ctrl+F12", back.Hotkey);
         Assert.Equal(@"D:\Shots", back.OutputDir);
         Assert.False(back.PlaySound);
         Assert.Equal(2f, back.TonemapHeadroom);
+        Assert.False(back.CopyToClipboard);
     }
 
     [Fact]
@@ -120,4 +121,7 @@ public class ConfigTests : IDisposable
         Assert.True(cfg.Save(CfgPath));
         Assert.False(File.Exists(CfgPath + ".bak"));
     }
+
+    [Fact]
+    public void CopyToClipboard_defaults_to_true() => Assert.True(new Config().CopyToClipboard);
 }

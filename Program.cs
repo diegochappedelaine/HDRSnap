@@ -23,6 +23,8 @@ public class Config
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "HDRSnap");
     public bool CaptureCursor { get; set; } = false;
     public bool PlaySound { get; set; } = true;
+    /// Copie aussi la capture dans le presse-papiers (PNG + bitmap). Mode tray uniquement.
+    public bool CopyToClipboard { get; set; } = true;
     public bool SubfolderPerApp { get; set; } = true;
     /// Marge au-dessus du blanc SDR allouée aux hautes lumières dans le PNG
     /// (cible du tone mapping = TonemapHeadroom x blanc SDR, en nits).
@@ -1018,12 +1020,17 @@ internal class TrayApp : Form
                 string path = Capturer.CaptureToFile(_cfg);
                 _lastFile = path;
                 Program.Log($"OK {path}");
+                // Le son d'abord : retour immédiat, sans attendre le presse-papiers.
                 if (_cfg.PlaySound) System.Media.SystemSounds.Asterisk.Play();
+                bool copied = _cfg.CopyToClipboard && CopyToClipboard(path);
                 string warn = Capturer.LastWarning;
                 if (warn != null)
                     _tray.ShowBalloonTip(8000, "HDRSnap - capture douteuse", warn, ToolTipIcon.Warning);
                 else
-                    _tray.ShowBalloonTip(1500, "Screenshot", Path.GetFileName(path), ToolTipIcon.Info);
+                    // « copié » seulement si ça l'est vraiment : sinon l'utilisateur collerait
+                    // le contenu précédent du presse-papiers en croyant coller sa capture.
+                    _tray.ShowBalloonTip(1500, "Screenshot",
+                        Path.GetFileName(path) + (copied ? " — copié dans le presse-papiers" : ""), ToolTipIcon.Info);
             }
             catch (Exception ex)
             {
@@ -1038,6 +1045,34 @@ internal class TrayApp : Form
     {
         Directory.CreateDirectory(_cfg.OutputDir);
         Process.Start("explorer.exe", _cfg.OutputDir);
+    }
+
+    /// Presse-papiers : bitmap (DIB) + flux PNG, pour que Paint, Discord, navigateurs… collent tous.
+    /// La lecture et le décodage se font sur le thread appelant (worker) : le thread UI fait
+    /// aussi tourner HookProc, et Windows retire un hook clavier qui dépasse
+    /// LowLevelHooksTimeout (~300 ms). Décoder un PNG 4K là-dessus tuerait le hotkey.
+    /// Seul le dépôt final exige un thread STA, donc lui seul passe par Invoke.
+    bool CopyToClipboard(string path)
+    {
+        try
+        {
+            byte[] png = File.ReadAllBytes(path);
+            using var bmpStream = new MemoryStream(png);   // doit rester ouvert tant que bmp vit
+            using var bmp = new Bitmap(bmpStream);
+            using var pngStream = new MemoryStream(png);
+            var data = new DataObject();
+            data.SetImage(bmp);
+            data.SetData("PNG", false, pngStream);
+            // copy: true => OleFlushClipboard rend tous les formats avant de revenir,
+            // donc disposer bmp/flux juste après est sans danger.
+            Invoke(new Action(() => Clipboard.SetDataObject(data, copy: true, retryTimes: 5, retryDelay: 100)));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Program.Log($"presse-papiers KO ({ex.Message})");   // non bloquant : le PNG est déjà sur disque
+            return false;
+        }
     }
 
     void ChooseFolder()

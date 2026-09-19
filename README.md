@@ -37,6 +37,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 | `OutputDir` | `Pictures\HDRSnap` | Output folder (can also be changed from the tray menu: *Choisir le dossier de sortie…*) |
 | `CaptureCursor` | `false` | Include the cursor in the capture |
 | `PlaySound` | `true` | Confirmation sound |
+| `CopyToClipboard` | `true` | Also copy the capture to the clipboard (PNG + bitmap); tray mode only |
 | `SubfolderPerApp` | `true` | Subfolder named after the foreground process |
 | `TonemapHeadroom` | `1.25` | Headroom above SDR white allotted to highlights (× SDR white, in nits) |
 
