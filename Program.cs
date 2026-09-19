@@ -32,42 +32,93 @@ public class Config
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HDRSnap");
     public static string FilePath => Path.Combine(Dir, "config.json");
 
-    public static Config Load()
+    /// Avertissement du dernier Load (null si RAS). Journalisé par Program.Main :
+    /// Config ne journalise pas elle-même pour rester testable.
+    public static string LoadWarning { get; private set; }
+
+    public static Config Load() => Load(FilePath);
+
+    public static Config Load(string path)
     {
-        try
+        LoadWarning = null;
+        if (File.Exists(path))
         {
-            if (File.Exists(FilePath))
-                return JsonSerializer.Deserialize<Config>(File.ReadAllText(FilePath)) ?? new Config();
+            try
+            {
+                var loaded = JsonSerializer.Deserialize<Config>(File.ReadAllText(path));
+                if (loaded != null) return loaded.Sanitized();
+                LoadWarning = $"config vide ({path}) -> valeurs par défaut, fichier conservé";
+            }
+            catch (Exception ex)
+            {
+                LoadWarning = $"config illisible ({path} : {ex.Message}) -> valeurs par défaut, fichier conservé";
+            }
+            return new Config();   // ne JAMAIS écraser le fichier de l'utilisateur
         }
-        catch { /* config corrompue -> défauts */ }
+
         var cfg = new Config();
         try
         {
-            Directory.CreateDirectory(Dir);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
+            // GetDirectoryName rend "" pour un nom nu et null pour une racine : dans les
+            // deux cas il n'y a pas de dossier à créer, et CreateDirectory lèverait.
+            var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(path, JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch { }
+        catch (Exception ex)
+        {
+            LoadWarning = $"config par défaut non écrite ({path} : {ex.Message})";
+        }
         return cfg;
     }
 
-    // "Ctrl+Shift+F11" -> (mods, vk)
-    public (uint mods, uint vk) ParseHotkey()
+    /// Valeurs nulles/vides (ex. "Hotkey": null dans le JSON) -> défauts.
+    Config Sanitized()
     {
-        uint mods = 0x4000; // MOD_NOREPEAT
-        Keys key = Keys.F11;
-        foreach (var raw in Hotkey.Split('+'))
+        if (string.IsNullOrWhiteSpace(Hotkey)) Hotkey = "F11";
+        if (string.IsNullOrWhiteSpace(OutputDir)) OutputDir = new Config().OutputDir;
+        return this;
+    }
+
+    /// "Ctrl+Shift+F11" -> (mods, vk). Bits de mods : Alt=1, Ctrl=2, Shift=4, Win=8
+    /// (mêmes valeurs que MOD_* de RegisterHotKey, lues par TrayApp.ModsMatch).
+    /// false + message si aucune touche, plusieurs touches, ou nom de touche inconnu
+    /// (noms = membres de System.Windows.Forms.Keys, insensibles à la casse).
+    public bool TryParseHotkey(out uint mods, out uint vk, out string error)
+    {
+        mods = 0; vk = 0; error = null;
+        Keys? key = null;
+        foreach (var raw in (Hotkey ?? "").Split('+'))
         {
             var part = raw.Trim();
+            if (part.Length == 0) continue;
             switch (part.ToLowerInvariant())
             {
                 case "ctrl": case "control": mods |= 0x2; break;
                 case "alt": mods |= 0x1; break;
                 case "shift": mods |= 0x4; break;
                 case "win": mods |= 0x8; break;
-                default: key = Enum.Parse<Keys>(part, true); break;
+                default:
+                    // Enum.TryParse accepte aussi la forme numérique : « 1 » donnerait
+                    // Keys.LButton (vk 1), un hotkey accepté mais que le hook clavier
+                    // ne verra jamais. On exige un nom de membre (« D1 », pas « 1 »).
+                    if (char.IsDigit(part[0]) || part[0] == '-' || part[0] == '+')
+                    { error = $"touche numérique « {part} » (utilise le nom du membre Keys, ex. D1)"; return false; }
+                    if (!Enum.TryParse<Keys>(part, true, out var k) || !Enum.IsDefined(typeof(Keys), k))
+                    { error = $"touche inconnue « {part} »"; return false; }
+                    // Un code de touche virtuelle tient sur 1..254 ; au-delà (Keys.Modifiers,
+                    // 0xFFFF0000) aucune frappe ne peut correspondre.
+                    if ((uint)k == 0 || (uint)k > 0xFE)
+                    { error = $"touche « {part} » hors plage des codes clavier (1-254)"; return false; }
+                    if (key != null)
+                    { error = $"plusieurs touches ({key} et {k})"; return false; }
+                    key = k;
+                    break;
             }
         }
-        return (mods, (uint)key);
+        if (key == null) { error = "aucune touche (modificateurs seuls ?)"; return false; }
+        vk = (uint)key.Value;
+        return true;
     }
 }
 
@@ -76,8 +127,6 @@ public class Config
 // ---------------------------------------------------------------------------
 internal static class Native
 {
-    [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
-    [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
     public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", EntryPoint = "SetWindowsHookExW", SetLastError = true)]
     public static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
@@ -774,14 +823,22 @@ internal class TrayApp : Form
     IntPtr _hook = IntPtr.Zero;
     uint _hkMods, _hkVk;
     bool _hkHeld;   // anti auto-repetition tant que la touche n'est pas relachee
+    string _hkLabel;   // texte affiché (hotkey config, ou "F11" après repli)
 
     public TrayApp(Config cfg)
     {
         _cfg = cfg;
         ShowInTaskbar = false;
 
+        if (!_cfg.TryParseHotkey(out _hkMods, out _hkVk, out string hkError))
+        {
+            _hkMods = 0; _hkVk = (uint)Keys.F11;
+            Program.Log($"ERR hotkey « {_cfg.Hotkey} » invalide ({hkError}) -> repli sur F11");
+        }
+        _hkLabel = hkError == null ? _cfg.Hotkey : "F11";
+
         var menu = new ContextMenuStrip();
-        menu.Items.Add($"Capturer ({cfg.Hotkey})", null, (_, _) => Shoot());
+        menu.Items.Add($"Capturer ({_hkLabel})", null, (_, _) => Shoot());
         menu.Items.Add("Ouvrir le dossier", null, (_, _) => OpenFolder());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quitter", null, (_, _) => { _tray.Visible = false; Application.Exit(); });
@@ -789,7 +846,7 @@ internal class TrayApp : Form
         _tray = new NotifyIcon
         {
             Icon = SystemIcons.Application,
-            Text = $"HDRSnap — {cfg.Hotkey}",
+            Text = $"HDRSnap — {_hkLabel}",
             Visible = true,
             ContextMenuStrip = menu,
         };
@@ -800,12 +857,17 @@ internal class TrayApp : Form
                 Process.Start("explorer.exe", $"/select,\"{_lastFile}\"");
         };
 
+        // Avant InstallHook : le shell n'affiche qu'un ballon à la fois par icône, et
+        // l'échec du hook (aucun hotkey ne marche) prime sur le repli F11.
+        if (hkError != null)
+            _tray.ShowBalloonTip(6000, "HDRSnap — hotkey invalide",
+                $"« {_cfg.Hotkey} » : {hkError}. Repli sur F11. Corrige {Config.FilePath}.", ToolTipIcon.Warning);
+
         InstallHook();
     }
 
     void InstallHook()
     {
-        (_hkMods, _hkVk) = _cfg.ParseHotkey();
         _ = Handle;             // force la creation du handle (la fenetre reste invisible)
         _hookProc = HookProc;   // reference gardee, sinon le GC collecte le delegue
         _hook = Native.SetWindowsHookEx(13 /* WH_KEYBOARD_LL */, _hookProc, IntPtr.Zero, 0);
@@ -814,7 +876,7 @@ internal class TrayApp : Form
             Program.Log($"ERR hook clavier impossible (err {Marshal.GetLastWin32Error()})");
             _tray.ShowBalloonTip(4000, "HDRSnap", "Impossible d'installer le hook clavier.", ToolTipIcon.Error);
         }
-        else Program.Log($"hotkey {_cfg.Hotkey} actif (hook clavier bas niveau)");
+        else Program.Log($"hotkey {_hkLabel} actif (hook clavier bas niveau)");
     }
 
     IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam)
@@ -916,6 +978,7 @@ internal static class Program
     static void Main(string[] args)
     {
         var cfg = Config.Load();
+        if (Config.LoadWarning != null) Log("ATTENTION " + Config.LoadWarning);
 
         Capturer.ForceToneMap = args.Contains("--forcetonemap");
 
