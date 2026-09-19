@@ -77,4 +77,47 @@ public class ConfigTests : IDisposable
         Assert.False(cfg.TryParseHotkey(out _, out var vk, out var err), $"accepté avec vk={vk}");
         Assert.False(string.IsNullOrEmpty(err));
     }
+
+    [Fact]
+    public void Save_then_Load_round_trips()
+    {
+        var cfg = new Config { Hotkey = "Ctrl+F12", OutputDir = @"D:\Shots", PlaySound = false, TonemapHeadroom = 2f };
+        Assert.True(cfg.Save(CfgPath));
+        var back = Config.Load(CfgPath);
+        Assert.Equal("Ctrl+F12", back.Hotkey);
+        Assert.Equal(@"D:\Shots", back.OutputDir);
+        Assert.False(back.PlaySound);
+        Assert.Equal(2f, back.TonemapHeadroom);
+    }
+
+    [Fact]
+    public void Save_creates_missing_directory()
+    {
+        string nested = Path.Combine(_dir, "a", "b", "config.json");
+        Assert.True(new Config().Save(nested));
+        Assert.True(File.Exists(nested));
+    }
+
+    [Fact]
+    public void Save_backs_up_a_config_that_Load_could_not_read()
+    {
+        const string garbage = "{ \"Hotkey\": \"Ctrl+F12\", ";   // JSON tronqué
+        File.WriteAllText(CfgPath, garbage);
+        var cfg = Config.Load(CfgPath);            // conserve le fichier, rend des défauts
+        cfg.OutputDir = @"D:\Ailleurs";
+
+        Assert.True(cfg.Save(CfgPath));
+        Assert.Equal(garbage, File.ReadAllText(CfgPath + ".bak"));   // l'original est sauvé
+        Assert.Equal(@"D:\Ailleurs", Config.Load(CfgPath).OutputDir);
+    }
+
+    [Fact]
+    public void Save_of_a_loaded_config_makes_no_backup()
+    {
+        Assert.True(new Config { OutputDir = @"D:\Un" }.Save(CfgPath));
+        var cfg = Config.Load(CfgPath);            // relu correctement
+        cfg.OutputDir = @"D:\Deux";
+        Assert.True(cfg.Save(CfgPath));
+        Assert.False(File.Exists(CfgPath + ".bak"));
+    }
 }

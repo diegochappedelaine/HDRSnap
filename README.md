@@ -34,7 +34,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 | Key | Default | Description |
 |---|---|---|
 | `Hotkey` | `F11` | Global hotkey (e.g. `Ctrl+Shift+F11`) |
-| `OutputDir` | `Pictures\HDRSnap` | Output folder |
+| `OutputDir` | `Pictures\HDRSnap` | Output folder (can also be changed from the tray menu: *Choisir le dossier de sortie…*) |
 | `CaptureCursor` | `false` | Include the cursor in the capture |
 | `PlaySound` | `true` | Confirmation sound |
 | `SubfolderPerApp` | `true` | Subfolder named after the foreground process |

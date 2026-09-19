@@ -46,7 +46,7 @@ public class Config
             try
             {
                 var loaded = JsonSerializer.Deserialize<Config>(File.ReadAllText(path));
-                if (loaded != null) return loaded.Sanitized();
+                if (loaded != null) { loaded.LoadedFromFile = true; return loaded.Sanitized(); }
                 LoadWarning = $"config vide ({path}) -> valeurs par défaut, fichier conservé";
             }
             catch (Exception ex)
@@ -57,19 +57,46 @@ public class Config
         }
 
         var cfg = new Config();
+        if (!cfg.Save(path))
+            LoadWarning = $"config par défaut non écrite ({path} : {LastSaveError})";
+        cfg.LoadedFromFile = true;   // ce fichier vient d'être écrit par nous : rien à préserver
+        return cfg;
+    }
+
+    /// Raison de la dernière écriture échouée (null si la dernière a réussi).
+    public static string LastSaveError { get; private set; }
+
+    /// Vrai seulement si cette instance vient d'un fichier réellement relu.
+    /// Champ (pas propriété) : System.Text.Json ne sérialise que les propriétés publiques.
+    internal bool LoadedFromFile;
+
+    public bool Save() => Save(FilePath);
+
+    /// Écrit la config complète (indentée). false si l'écriture échoue ; l'appelant journalise.
+    /// Écriture atomique (fichier temporaire puis remplacement) : une coupure de courant ou
+    /// un disque plein ne laisse pas un config.json tronqué.
+    public bool Save(string path)
+    {
+        LastSaveError = null;
         try
         {
             // GetDirectoryName rend "" pour un nom nu et null pour une racine : dans les
             // deux cas il n'y a pas de dossier à créer, et CreateDirectory lèverait.
             var dir = Path.GetDirectoryName(Path.GetFullPath(path));
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(path, JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true }));
+
+            // Load conserve exprès un fichier qu'il n'a pas su lire ; l'écraser ici ferait
+            // perdre en silence les réglages que l'utilisateur y avait mis. On le sauve d'abord.
+            if (!LoadedFromFile && File.Exists(path))
+                File.Copy(path, path + ".bak", true);
+
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            if (File.Exists(path)) File.Replace(tmp, path, null);
+            else File.Move(tmp, path);
+            return true;
         }
-        catch (Exception ex)
-        {
-            LoadWarning = $"config par défaut non écrite ({path} : {ex.Message})";
-        }
-        return cfg;
+        catch (Exception ex) { LastSaveError = ex.Message; return false; }
     }
 
     /// Valeurs nulles/vides (ex. "Hotkey": null dans le JSON) -> défauts.
@@ -871,6 +898,7 @@ internal class TrayApp : Form
         var menu = new ContextMenuStrip();
         menu.Items.Add($"Capturer ({_hkLabel})", null, (_, _) => Shoot());
         menu.Items.Add("Ouvrir le dossier", null, (_, _) => OpenFolder());
+        menu.Items.Add("Choisir le dossier de sortie…", null, (_, _) => ChooseFolder());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Quitter", null, (_, _) => { _tray.Visible = false; Application.Exit(); });
 
@@ -1010,6 +1038,33 @@ internal class TrayApp : Form
     {
         Directory.CreateDirectory(_cfg.OutputDir);
         Process.Start("explorer.exe", _cfg.OutputDir);
+    }
+
+    void ChooseFolder()
+    {
+        using var dlg = new FolderBrowserDialog
+        {
+            Description = "Dossier où enregistrer les captures",
+            UseDescriptionForTitle = true,
+            InitialDirectory = Directory.Exists(_cfg.OutputDir) ? _cfg.OutputDir : "",
+            // InitialDirectory n'est qu'un défaut, ignoré dès que le picker a mémorisé un
+            // dernier dossier : c'est SelectedPath qui impose vraiment le point de départ.
+            SelectedPath = Directory.Exists(_cfg.OutputDir) ? _cfg.OutputDir : "",
+            ShowNewFolderButton = true,
+        };
+        if (dlg.ShowDialog() != DialogResult.OK) return;
+
+        // Une capture déjà lancée lit OutputDir au moment de l'enregistrement : elle peut
+        // donc atterrir dans l'ancien ou le nouveau dossier. Sans conséquence, le chemin
+        // retenu est journalisé à chaque capture.
+        _cfg.OutputDir = dlg.SelectedPath;          // pris en compte à la prochaine capture
+        bool saved = _cfg.Save();
+        Program.Log(saved
+            ? $"dossier de sortie -> {_cfg.OutputDir}"
+            : $"ERR config non enregistrée ({Config.LastSaveError}) ; dossier de sortie -> {_cfg.OutputDir} (valable jusqu'au redémarrage)");
+        _tray.ShowBalloonTip(3000, "HDRSnap",
+            saved ? $"Captures dans : {_cfg.OutputDir}" : "Dossier changé, mais config.json n'a pas pu être écrit.",
+            saved ? ToolTipIcon.Info : ToolTipIcon.Warning);
     }
 
     protected override void Dispose(bool disposing)
