@@ -849,6 +849,11 @@ internal class TrayApp : Form
     IntPtr _hook = IntPtr.Zero;
     uint _hkMods, _hkVk;
     bool _hkHeld;   // anti auto-repetition tant que la touche n'est pas relachee
+    // Windows retire un hook LL sans prévenir s'il dépasse LowLevelHooksTimeout
+    // (pause GC, thread UI occupé pendant un appui). Aucune API ne permet de le
+    // savoir : on le réinstalle périodiquement, sur le thread UI.
+    System.Windows.Forms.Timer _rehook;
+    bool _rearmFailed;   // évite de journaliser la même panne de réarmement chaque minute
     string _hkLabel;   // texte affiché (hotkey config, ou "F11" après repli)
 
     public TrayApp(Config cfg)
@@ -890,12 +895,16 @@ internal class TrayApp : Form
                 $"« {_cfg.Hotkey} » : {hkError}. Repli sur F11. Corrige {Config.FilePath}.", ToolTipIcon.Warning);
 
         InstallHook();
+
+        _rehook = new System.Windows.Forms.Timer { Interval = 60_000 };
+        _rehook.Tick += (_, _) => ReinstallHook();
+        _rehook.Start();
     }
 
     void InstallHook()
     {
         _ = Handle;             // force la creation du handle (la fenetre reste invisible)
-        _hookProc = HookProc;   // reference gardee, sinon le GC collecte le delegue
+        _hookProc ??= HookProc; // reference gardee, sinon le GC collecte le delegue
         _hook = Native.SetWindowsHookEx(13 /* WH_KEYBOARD_LL */, _hookProc, IntPtr.Zero, 0);
         if (_hook == IntPtr.Zero)
         {
@@ -903,6 +912,34 @@ internal class TrayApp : Form
             _tray.ShowBalloonTip(4000, "HDRSnap", "Impossible d'installer le hook clavier.", ToolTipIcon.Error);
         }
         else Program.Log($"hotkey {_hkLabel} actif (hook clavier bas niveau)");
+    }
+
+    void ReinstallHook()
+    {
+        // Installer AVANT de retirer : un échec passager de SetWindowsHookEx ne doit pas
+        // détruire un hook qui fonctionnait. Les deux coexistent un instant, sans risque
+        // de double capture (même délégué, et _hkHeld bloque le second appel).
+        IntPtr fresh = Native.SetWindowsHookEx(13 /* WH_KEYBOARD_LL */, _hookProc, IntPtr.Zero, 0);
+        if (fresh == IntPtr.Zero)
+        {
+            if (!_rearmFailed)   // une ligne par panne, pas une par minute
+            {
+                _rearmFailed = true;
+                Program.Log($"ERR réarmement hook clavier impossible (err {Marshal.GetLastWin32Error()}), ancien hook conservé");
+            }
+            return;
+        }
+
+        if (_hook != IntPtr.Zero) Native.UnhookWindowsHookEx(_hook);
+        _hook = fresh;
+        // Si le hook est tombé alors que la touche était enfoncée, le KEYUP s'est perdu
+        // et _hkHeld resterait vrai : la frappe suivante serait avalée sans capturer.
+        _hkHeld = false;
+        if (_rearmFailed)
+        {
+            _rearmFailed = false;
+            Program.Log("réarmement hook clavier de nouveau OK");
+        }
     }
 
     IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam)
@@ -979,6 +1016,7 @@ internal class TrayApp : Form
     {
         if (disposing)
         {
+            _rehook?.Dispose();
             if (_hook != IntPtr.Zero) { Native.UnhookWindowsHookEx(_hook); _hook = IntPtr.Zero; }
             _tray.Dispose();
         }
