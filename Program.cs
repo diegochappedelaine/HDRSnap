@@ -125,7 +125,7 @@ internal static class Native
     {
         public LUID adapterId;
         public uint id, modeInfoIdx, outputTechnology, rotation, scaling;
-        public ulong refreshRate;
+        public uint refreshRateNumerator, refreshRateDenominator; // DISPLAYCONFIG_RATIONAL : 2 x UINT32, aligné 4 (pas ulong : forcerait un padding de 8)
         public uint scanLineOrdering;
         public int targetAvailable;
         public uint statusFlags;
@@ -156,8 +156,10 @@ internal static class Native
     }
 
     /// Niveau de blanc SDR du moniteur en nits (slider Windows "luminosité SDR").
-    /// L'API DisplayConfig échoue (ERROR_INVALID_PARAMETER) sur certaines builds Win11 :
-    /// on retombe alors sur le registre (MonitorDataStore), puis sur 200 nits.
+    /// L'API DisplayConfig renvoyait ERROR_INVALID_PARAMETER tant que
+    /// DISPLAYCONFIG_PATH_TARGET_INFO faisait 56 octets au lieu de 48 (refreshRate déclaré
+    /// en ulong) : la faute était ici, pas dans la build de Windows. Tailles verrouillées
+    /// par InteropLayoutTests. Replis conservés : registre (MonitorDataStore), puis 200 nits.
     public static (float nits, string source) GetSdrWhite(IntPtr hMonitor)
     {
         float? v = SdrWhiteFromDisplayConfig(hMonitor);
@@ -174,11 +176,18 @@ internal static class Native
             using var root = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
                 @"SYSTEM\CurrentControlSet\Control\GraphicsDrivers\MonitorDataStore");
             if (root == null) return null;
-            float best = 0f;
+            float best = 0f, first = 0f;
+            bool ambiguous = false;
             foreach (var name in root.GetSubKeyNames())
                 using (var k = root.OpenSubKey(name))
                     if (k?.GetValue("SDRWhiteLevel") is int lvl && lvl >= 1000 && lvl <= 10000)
-                        best = Math.Max(best, lvl / 1000f * 80f);
+                    {
+                        float nits = lvl / 1000f * 80f;
+                        if (first == 0f) first = nits; else if (nits != first) ambiguous = true;
+                        best = Math.Max(best, nits);
+                    }
+            if (ambiguous)
+                Program.Log($"blanc SDR (registre) : plusieurs moniteurs avec des valeurs différentes, max retenu ({best:0} nits)");
             return best > 0f ? best : null;
         }
         catch { return null; }
@@ -221,8 +230,20 @@ internal static class Native
                         id = paths[i].targetInfo.id,
                     }
                 };
-                if (DisplayConfigGetDeviceInfo(ref sdr) == 0)
-                    return sdr.SDRWhiteLevel / 1000f * 80f;
+                int rc = DisplayConfigGetDeviceInfo(ref sdr);
+                if (rc != 0)
+                {
+                    Program.Log($"blanc SDR : GET_SDR_WHITE_LEVEL a échoué (erreur {rc}) pour {mi.szDevice} -> repli registre");
+                    continue;
+                }
+                // Même garde que le repli registre : une valeur hors plage (0 sur une cible
+                // clonée inactive) donnerait un blanc nul et une image NaN en aval.
+                if (sdr.SDRWhiteLevel < 1000 || sdr.SDRWhiteLevel > 10000)
+                {
+                    Program.Log($"blanc SDR : valeur API hors plage ({sdr.SDRWhiteLevel}) pour {mi.szDevice}, cible ignorée");
+                    continue;
+                }
+                return sdr.SDRWhiteLevel / 1000f * 80f;
             }
         }
         catch { }
