@@ -26,7 +26,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 ## Installation
 
 1. Copy `publish\HDRSnap.exe` anywhere you like (no installer needed).
-2. Run it once to generate the default config at `%APPDATA%\HDRSnap\config.json` (also reachable from the tray menu: *Modifier la configuration…*). Edits are applied on save, no restart needed.
+2. Run it once to generate the default config at `%APPDATA%\HDRSnap\config.json` (also reachable from the tray menu: *Edit configuration…*). Edits are applied on save, no restart needed.
 3. For autostart: drop a shortcut to the exe in `shell:startup`.
 
 ### Config (`%APPDATA%\HDRSnap\config.json`)
@@ -35,7 +35,7 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 |---|---|---|
 | `Hotkey` | `F11` | Global hotkey (e.g. `Ctrl+Shift+F11`) |
 | `WindowHotkey` | `Ctrl+F11` | Hotkey to capture only the foreground window (empty string disables) |
-| `OutputDir` | `Pictures\HDRSnap` | Output folder (can also be changed from the tray menu: *Choisir le dossier de sortie…*) |
+| `OutputDir` | `Pictures\HDRSnap` | Output folder (can also be changed from the tray menu: *Choose output folder…*) |
 | `CaptureCursor` | `false` | Include the cursor in the capture |
 | `PlaySound` | `true` | Confirmation sound |
 | `CopyToClipboard` | `true` | Also copy the capture to the clipboard (PNG + bitmap); tray mode only |

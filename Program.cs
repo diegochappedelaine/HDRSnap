@@ -51,18 +51,18 @@ public class Config
             {
                 var loaded = JsonSerializer.Deserialize<Config>(File.ReadAllText(path));
                 if (loaded != null) { loaded.LoadedFromFile = true; return loaded.Sanitized(); }
-                LoadWarning = $"config vide ({path}) -> valeurs par défaut, fichier conservé";
+                LoadWarning = $"empty config ({path}) -> defaults, file kept";
             }
             catch (Exception ex)
             {
-                LoadWarning = $"config illisible ({path} : {ex.Message}) -> valeurs par défaut, fichier conservé";
+                LoadWarning = $"unreadable config ({path} : {ex.Message}) -> defaults, file kept";
             }
             return new Config();   // ne JAMAIS écraser le fichier de l'utilisateur
         }
 
         var cfg = new Config();
         if (!cfg.Save(path))
-            LoadWarning = $"config par défaut non écrite ({path} : {LastSaveError})";
+            LoadWarning = $"default config not written ({path} : {LastSaveError})";
         cfg.LoadedFromFile = true;   // ce fichier vient d'être écrit par nous : rien à préserver
         return cfg;
     }
@@ -146,20 +146,20 @@ public class Config
                     // Keys.LButton (vk 1), un hotkey accepté mais que le hook clavier
                     // ne verra jamais. On exige un nom de membre (« D1 », pas « 1 »).
                     if (char.IsDigit(part[0]) || part[0] == '-' || part[0] == '+')
-                    { error = $"touche numérique « {part} » (utilise le nom du membre Keys, ex. D1)"; return false; }
+                    { error = $"numeric key \"{part}\" (use the Keys member name, e.g. D1)"; return false; }
                     if (!Enum.TryParse<Keys>(part, true, out var k) || !Enum.IsDefined(typeof(Keys), k))
-                    { error = $"touche inconnue « {part} »"; return false; }
+                    { error = $"unknown key \"{part}\""; return false; }
                     // Un code de touche virtuelle tient sur 1..254 ; au-delà (Keys.Modifiers,
                     // 0xFFFF0000) aucune frappe ne peut correspondre.
                     if ((uint)k == 0 || (uint)k > 0xFE)
-                    { error = $"touche « {part} » hors plage des codes clavier (1-254)"; return false; }
+                    { error = $"key \"{part}\" outside the virtual-key range (1-254)"; return false; }
                     if (key != null)
-                    { error = $"plusieurs touches ({key} et {k})"; return false; }
+                    { error = $"several keys ({key} and {k})"; return false; }
                     key = k;
                     break;
             }
         }
-        if (key == null) { error = "aucune touche (modificateurs seuls ?)"; return false; }
+        if (key == null) { error = "no key (modifiers only?)"; return false; }
         vk = (uint)key.Value;
         return true;
     }
@@ -258,8 +258,8 @@ internal static class Native
         float? v = SdrWhiteFromDisplayConfig(hMonitor);
         if (v.HasValue) return (v.Value, "API");
         v = SdrWhiteFromRegistry();
-        if (v.HasValue) return (v.Value, "registre");
-        return (200f, "défaut");
+        if (v.HasValue) return (v.Value, "registry");
+        return (200f, "default");
     }
 
     static float? SdrWhiteFromRegistry()
@@ -280,7 +280,7 @@ internal static class Native
                         best = Math.Max(best, nits);
                     }
             if (ambiguous)
-                Program.Log($"blanc SDR (registre) : plusieurs moniteurs avec des valeurs différentes, max retenu ({best:0} nits)");
+                Program.Log($"SDR white (registry): several monitors with different values, max kept ({best:0} nits)");
             return best > 0f ? best : null;
         }
         catch { return null; }
@@ -326,14 +326,14 @@ internal static class Native
                 int rc = DisplayConfigGetDeviceInfo(ref sdr);
                 if (rc != 0)
                 {
-                    Program.Log($"blanc SDR : GET_SDR_WHITE_LEVEL a échoué (erreur {rc}) pour {mi.szDevice} -> repli registre");
+                    Program.Log($"SDR white: GET_SDR_WHITE_LEVEL failed (error {rc}) for {mi.szDevice} -> registry fallback");
                     continue;
                 }
                 // Même garde que le repli registre : une valeur hors plage (0 sur une cible
                 // clonée inactive) donnerait un blanc nul et une image NaN en aval.
                 if (sdr.SDRWhiteLevel < 1000 || sdr.SDRWhiteLevel > 10000)
                 {
-                    Program.Log($"blanc SDR : valeur API hors plage ({sdr.SDRWhiteLevel}) pour {mi.szDevice}, cible ignorée");
+                    Program.Log($"SDR white: API value out of range ({sdr.SDRWhiteLevel}) for {mi.szDevice}, target ignored");
                     continue;
                 }
                 return sdr.SDRWhiteLevel / 1000f * 80f;
@@ -421,7 +421,7 @@ internal static class Capturer
         catch (Exception ex) when (IsDeviceError(ex))
         {
             // device perdu (TDR / mise à jour pilote) : reset et 2e tentative
-            Program.Log($"capture KO ({ex.GetType().Name} : {ex.Message}) -> reset device, 2e tentative");
+            Program.Log($"capture failed ({ex.GetType().Name}: {ex.Message}) -> device reset, second attempt");
             ResetDevice();
             return CaptureToFileCore(cfg, mode, hwnd);
         }
@@ -434,7 +434,7 @@ internal static class Capturer
             // Réservé à l'écran : une fenêtre non capturable (WDA_EXCLUDEFROMCAPTURE, fenêtre
             // élevée) ne livre jamais de frame sans que le device soit en cause, et détruire
             // le device partagé pénaliserait toutes les captures suivantes.
-            Program.Log("capture KO (timeout) -> reset device, pas de 2e tentative");
+            Program.Log("capture failed (timeout) -> device reset, no second attempt");
             ResetDevice();
             throw;
         }
@@ -456,7 +456,7 @@ internal static class Capturer
         {
             // hwnd fourni par l'appelant (menu du tray) sinon la fenêtre au premier plan (hotkey).
             hwndTarget = hwnd != IntPtr.Zero ? hwnd : Native.GetForegroundWindow();
-            if (hwndTarget == IntPtr.Zero) throw new InvalidOperationException("Aucune fenêtre au premier plan.");
+            if (hwndTarget == IntPtr.Zero) throw new InvalidOperationException("No foreground window.");
             hmon = Native.MonitorFromWindow(hwndTarget, 2 /* MONITOR_DEFAULTTONEAREST */);
         }
         else
@@ -467,8 +467,8 @@ internal static class Capturer
 
         bool hdr = IsMonitorHdr(hmon);
         var (sdrNits, sdrSrc) = hdr ? Native.GetSdrWhite(hmon) : (200f, "n/a");
-        string what = mode == CaptureMode.Window ? "capture fenêtre" : "capture écran";
-        Program.Log(hdr ? $"{what} HDR (blanc SDR = {sdrNits:0} nits, source : {sdrSrc})" : $"{what} SDR");
+        string what = mode == CaptureMode.Window ? "window capture" : "screen capture";
+        Program.Log(hdr ? $"HDR {what} (SDR white = {sdrNits:0} nits, source: {sdrSrc})" : $"SDR {what}");
 
         EnsureDevice();
         var item = mode == CaptureMode.Window ? CreateItemForWindow(hwndTarget) : CreateItemForMonitor(hmon);
@@ -491,7 +491,7 @@ internal static class Capturer
         session.StartCapture();
 
         if (!gotFrame.Wait(3000))
-            throw new TimeoutException("Aucune frame reçue en 3 s (capture bloquée ?)");
+            throw new TimeoutException("No frame received in 3 s (capture blocked?)");
 
         using (frame)
         {
@@ -529,7 +529,7 @@ internal static class Capturer
                     if (maxRaw * scale <= 1.02f && !ForceToneMap)
                     {
                         // rien de significatif au-dessus du blanc SDR : simple remise à l'échelle
-                        Program.Log($"plage SDR, pas de tone mapping (p99,99 = {maxRaw * 80f:0} nits, max = {absMax * 80f:0} nits)");
+                        Program.Log($"SDR range, no tone mapping (p99.99 = {maxRaw * 80f:0} nits, max = {absMax * 80f:0} nits)");
                         // heuristique valable pour une capture écran seulement
                         if (mode == CaptureMode.Monitor)
                             WarnIfLooksLikeDesktop(fgName, fgExe, maxRaw * 80f, absMax * 80f, sdrNits);
@@ -542,12 +542,12 @@ internal static class Capturer
                         try
                         {
                             bgra = ToneMapWithD2D(srcTex, w, h, maxNits, targetNits);
-                            Program.Log($"tone map D2D : MaxCLL(p99,99) {maxNits:0} nits (max abs {absMax * 80f:0}) -> cible {targetNits:0} nits");
+                            Program.Log($"D2D tone map: MaxCLL(p99.99) {maxNits:0} nits (abs max {absMax * 80f:0}) -> target {targetNits:0} nits");
                         }
                         catch (Exception ex)
                         {
                             ResetD2D();   // le device D2D peut être coincé : EnsureD2D le recréera
-                            Program.Log($"tone map D2D KO ({ex.Message}) -> fallback CPU (blanc = p99,99 = {maxRaw * scale:0.00} x blanc SDR ; <= 1,005 => simple écrêtage)");
+                            Program.Log($"D2D tone map failed ({ex.Message}) -> CPU fallback (white = p99.99 = {maxRaw * scale:0.00} x SDR white; <= 1.005 => plain clipping)");
                             bgra = ToneMapScRgbToBgra(map.DataPointer, (int)map.RowPitch, w, h, sdrNits, maxRaw * scale);
                         }
                     }
@@ -893,13 +893,13 @@ internal static class Capturer
         if (Math.Abs(maxNits - sdrNits) > tol) return;     // ca depasse le blanc SDR : vraie frame de jeu
         if (Math.Abs(p9999Nits - sdrNits) > tol) return;   // pas ecrete a plat
 
-        string msg = $"{fgName} est au premier plan mais la frame est ecretee pile au blanc SDR "
-                   + $"({sdrNits:0} nits) : c'est probablement le bureau et pas le jeu.";
+        string msg = $"{fgName} is in the foreground but the frame is clipped exactly at SDR white "
+                   + $"({sdrNits:0} nits): this is probably the desktop, not the game.";
         msg += FsoDisabled(fgExe)
-            ? " Les optimisations du mode plein ecran sont DESACTIVEES pour cet exe :"
-              + " decoche 'Desactiver les optimisations du mode plein ecran' dans ses proprietes."
-            : " Passe le jeu en fenetre sans bordure.";
-        Program.Log("ATTENTION " + msg);
+            ? " Fullscreen optimizations are DISABLED for this exe:"
+              + " untick 'Disable fullscreen optimizations' in its properties."
+            : " Switch the game to borderless windowed.";
+        Program.Log("WARNING " + msg);
         LastWarning = msg;
     }
 }
@@ -951,11 +951,11 @@ internal class TrayApp : Form
         _miWindow = new ToolStripMenuItem("", null, (_, _) => Shoot(CaptureMode.Window, _fgBeforeMenu));
         menu.Items.Add(_miScreen);
         menu.Items.Add(_miWindow);
-        menu.Items.Add("Ouvrir le dossier", null, (_, _) => OpenFolder());
-        menu.Items.Add("Choisir le dossier de sortie…", null, (_, _) => ChooseFolder());
-        menu.Items.Add("Modifier la configuration…", null, (_, _) => OpenConfigFile());
+        menu.Items.Add("Open folder", null, (_, _) => OpenFolder());
+        menu.Items.Add("Choose output folder…", null, (_, _) => ChooseFolder());
+        menu.Items.Add("Edit configuration…", null, (_, _) => OpenConfigFile());
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Quitter", null, (_, _) => { _tray.Visible = false; Application.Exit(); });
+        menu.Items.Add("Quit", null, (_, _) => { _tray.Visible = false; Application.Exit(); });
 
         _tray = new NotifyIcon
         {
@@ -999,7 +999,7 @@ internal class TrayApp : Form
             _watcher.Renamed += OnConfigFileChanged;
             _watcher.EnableRaisingEvents = true;
         }
-        catch (Exception ex) { Program.Log($"surveillance de config.json impossible ({ex.Message})"); }
+        catch (Exception ex) { Program.Log($"cannot watch config.json ({ex.Message})"); }
     }
 
     void OnConfigFileChanged(object sender, FileSystemEventArgs e)
@@ -1028,10 +1028,10 @@ internal class TrayApp : Form
             // Fichier peut-être encore verrouillé ou écrit à moitié : on retente avant de crier.
             if (_reloadRetries++ < 2) { _reloadDebounce.Start(); return; }
             _reloadRetries = 0;
-            Program.Log("ATTENTION " + Config.LoadWarning);
+            Program.Log("WARNING " + Config.LoadWarning);
             // Ce qui est sur le disque n'est plus ce qu'on a lu : un Save() devra le sauvegarder.
             _cfg.LoadedFromFile = false;
-            _tray.ShowBalloonTip(5000, "HDRSnap — config non rechargée", Config.LoadWarning, ToolTipIcon.Warning);
+            _tray.ShowBalloonTip(5000, "HDRSnap — config not reloaded", Config.LoadWarning, ToolTipIcon.Warning);
             return;                                  // on garde les réglages précédents
         }
         _reloadRetries = 0;
@@ -1045,9 +1045,9 @@ internal class TrayApp : Form
         foreach (var w in warnings) Program.Log("ERR " + w);
         RefreshHotkeyLabels();
         ReinstallHook();
-        Program.Log($"config rechargée (hotkeys {string.Join(", ", _hotkeys.Select(h => h.Label))}, dossier {_cfg.OutputDir})");
+        Program.Log($"config reloaded (hotkeys {string.Join(", ", _hotkeys.Select(h => h.Label))}, folder {_cfg.OutputDir})");
         _tray.ShowBalloonTip(2500, "HDRSnap",
-            warnings.Count > 0 ? string.Join("\n", warnings) : $"Configuration rechargée — {_hotkeys[0].Label}",
+            warnings.Count > 0 ? string.Join("\n", warnings) : $"Configuration reloaded — {_hotkeys[0].Label}",
             warnings.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info);
     }
 
@@ -1058,10 +1058,10 @@ internal class TrayApp : Form
         _hook = Native.SetWindowsHookEx(13 /* WH_KEYBOARD_LL */, _hookProc, IntPtr.Zero, 0);
         if (_hook == IntPtr.Zero)
         {
-            Program.Log($"ERR hook clavier impossible (err {Marshal.GetLastWin32Error()})");
-            _tray.ShowBalloonTip(4000, "HDRSnap", "Impossible d'installer le hook clavier.", ToolTipIcon.Error);
+            Program.Log($"ERR keyboard hook failed (err {Marshal.GetLastWin32Error()})");
+            _tray.ShowBalloonTip(4000, "HDRSnap", "Could not install the keyboard hook.", ToolTipIcon.Error);
         }
-        else Program.Log($"hotkeys actives : {string.Join(", ", _hotkeys.Select(h => $"{h.Label} ({h.Mode})"))} (hook clavier bas niveau)");
+        else Program.Log($"active hotkeys: {string.Join(", ", _hotkeys.Select(h => $"{h.Label} ({h.Mode})"))} (low-level keyboard hook)");
     }
 
     void ReinstallHook()
@@ -1075,7 +1075,7 @@ internal class TrayApp : Form
             if (!_rearmFailed)   // une ligne par panne, pas une par minute
             {
                 _rearmFailed = true;
-                Program.Log($"ERR réarmement hook clavier impossible (err {Marshal.GetLastWin32Error()}), ancien hook conservé");
+                Program.Log($"ERR re-arming the keyboard hook failed (err {Marshal.GetLastWin32Error()}), previous hook kept");
             }
             return;
         }
@@ -1088,7 +1088,7 @@ internal class TrayApp : Form
         if (_rearmFailed)
         {
             _rearmFailed = false;
-            Program.Log("réarmement hook clavier de nouveau OK");
+            Program.Log("keyboard hook re-arming OK again");
         }
     }
 
@@ -1132,16 +1132,16 @@ internal class TrayApp : Form
             list.Add(new HotkeyBinding(mods, vk, cfg.Hotkey, CaptureMode.Monitor));
         else
         {
-            warnings.Add($"hotkey « {cfg.Hotkey} » invalide ({err}) -> repli sur F11");
+            warnings.Add($"invalid hotkey \"{cfg.Hotkey}\" ({err}) -> falling back to F11");
             list.Add(new HotkeyBinding(0, (uint)Keys.F11, "F11", CaptureMode.Monitor));
         }
 
         if (!string.IsNullOrWhiteSpace(cfg.WindowHotkey))
         {
             if (!Config.TryParseHotkey(cfg.WindowHotkey, out uint wm, out uint wv, out string werr))
-                warnings.Add($"WindowHotkey « {cfg.WindowHotkey} » invalide ({werr}) -> capture fenêtre désactivée");
+                warnings.Add($"invalid WindowHotkey \"{cfg.WindowHotkey}\" ({werr}) -> window capture disabled");
             else if (wm == list[0].Mods && wv == list[0].Vk)
-                warnings.Add($"WindowHotkey identique à Hotkey ({cfg.WindowHotkey}) -> capture fenêtre désactivée");
+                warnings.Add($"WindowHotkey equals Hotkey ({cfg.WindowHotkey}) -> window capture disabled");
             else
                 list.Add(new HotkeyBinding(wm, wv, cfg.WindowHotkey, CaptureMode.Window));
         }
@@ -1187,17 +1187,17 @@ internal class TrayApp : Form
                 bool copied = _cfg.CopyToClipboard && CopyToClipboard(path);
                 string warn = Capturer.LastWarning;
                 if (warn != null)
-                    _tray.ShowBalloonTip(8000, "HDRSnap - capture douteuse", warn, ToolTipIcon.Warning);
+                    _tray.ShowBalloonTip(8000, "HDRSnap - suspicious capture", warn, ToolTipIcon.Warning);
                 else
                     // « copié » seulement si ça l'est vraiment : sinon l'utilisateur collerait
                     // le contenu précédent du presse-papiers en croyant coller sa capture.
                     _tray.ShowBalloonTip(1500, "Screenshot",
-                        Path.GetFileName(path) + (copied ? " — copié dans le presse-papiers" : ""), ToolTipIcon.Info);
+                        Path.GetFileName(path) + (copied ? " — copied to clipboard" : ""), ToolTipIcon.Info);
             }
             catch (Exception ex)
             {
                 Program.Log($"ERR {ex}");
-                _tray.ShowBalloonTip(4000, "HDRSnap — échec", ex.Message, ToolTipIcon.Error);
+                _tray.ShowBalloonTip(4000, "HDRSnap — failed", ex.Message, ToolTipIcon.Error);
             }
             finally { _busy = false; }
         });
@@ -1205,12 +1205,12 @@ internal class TrayApp : Form
 
     void RefreshHotkeyLabels()
     {
-        _miScreen.Text = $"Capturer l'écran ({_hotkeys[0].Label})";
+        _miScreen.Text = $"Capture screen ({_hotkeys[0].Label})";
         // Available, pas Visible : le getter de Visible vaut false tant que le menu n'est
         // pas déroulé, donc s'en servir comme condition laisserait l'entrée sans libellé.
         bool hasWindowHotkey = _hotkeys.Length > 1;
         _miWindow.Available = hasWindowHotkey;
-        if (hasWindowHotkey) _miWindow.Text = $"Capturer la fenêtre ({_hotkeys[1].Label})";
+        if (hasWindowHotkey) _miWindow.Text = $"Capture window ({_hotkeys[1].Label})";
         _tray.Text = $"HDRSnap — {_hotkeys[0].Label}";
     }
 
@@ -1223,7 +1223,7 @@ internal class TrayApp : Form
         }
         catch (Exception ex)
         {
-            Program.Log($"ouverture config KO ({ex.Message}) -> dossier");
+            Program.Log($"opening config failed ({ex.Message}) -> folder");
             Process.Start("explorer.exe", $"/select,\"{Config.FilePath}\"");
         }
     }
@@ -1257,7 +1257,7 @@ internal class TrayApp : Form
         }
         catch (Exception ex)
         {
-            Program.Log($"presse-papiers KO ({ex.Message})");   // non bloquant : le PNG est déjà sur disque
+            Program.Log($"clipboard failed ({ex.Message})");   // non bloquant : le PNG est déjà sur disque
             return false;
         }
     }
@@ -1266,7 +1266,7 @@ internal class TrayApp : Form
     {
         using var dlg = new FolderBrowserDialog
         {
-            Description = "Dossier où enregistrer les captures",
+            Description = "Folder where captures are saved",
             UseDescriptionForTitle = true,
             InitialDirectory = Directory.Exists(_cfg.OutputDir) ? _cfg.OutputDir : "",
             // InitialDirectory n'est qu'un défaut, ignoré dès que le picker a mémorisé un
@@ -1282,10 +1282,10 @@ internal class TrayApp : Form
         _cfg.OutputDir = dlg.SelectedPath;          // pris en compte à la prochaine capture
         bool saved = _cfg.Save();
         Program.Log(saved
-            ? $"dossier de sortie -> {_cfg.OutputDir}"
-            : $"ERR config non enregistrée ({Config.LastSaveError}) ; dossier de sortie -> {_cfg.OutputDir} (valable jusqu'au redémarrage)");
+            ? $"output folder -> {_cfg.OutputDir}"
+            : $"ERR config not saved ({Config.LastSaveError}); output folder -> {_cfg.OutputDir} (until restart)");
         _tray.ShowBalloonTip(3000, "HDRSnap",
-            saved ? $"Captures dans : {_cfg.OutputDir}" : "Dossier changé, mais config.json n'a pas pu être écrit.",
+            saved ? $"Captures go to: {_cfg.OutputDir}" : "Folder changed, but config.json could not be written.",
             saved ? ToolTipIcon.Info : ToolTipIcon.Warning);
     }
 
@@ -1321,7 +1321,7 @@ internal static class Program
     static void Main(string[] args)
     {
         var cfg = Config.Load();
-        if (Config.LoadWarning != null) Log("ATTENTION " + Config.LoadWarning);
+        if (Config.LoadWarning != null) Log("WARNING " + Config.LoadWarning);
 
         Capturer.ForceToneMap = args.Contains("--forcetonemap");
 
@@ -1337,7 +1337,7 @@ internal static class Program
 
         if (!GraphicsCaptureSession.IsSupported())
         {
-            MessageBox.Show("Windows Graphics Capture non supporté sur ce système.", "HDRSnap");
+            MessageBox.Show("Windows Graphics Capture is not supported on this system.", "HDRSnap");
             return;
         }
 

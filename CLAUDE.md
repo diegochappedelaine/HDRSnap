@@ -32,7 +32,7 @@ optimizations). Do not undo any of them.
 
 ## Conventions
 
-- Identifiers in English; comments, log messages and UI strings in French.
+- Identifiers, UI strings and log messages in English; code comments may stay French.
 - Package versions: wildcard major (`3.*`).
 - Commit messages in French, `Zone : description` (see `git log`).
 - Pixel math: scRGB linear, `1.0 = 80 nits`, 4 channels per pixel, row pitch
