@@ -4,7 +4,7 @@ namespace HDRSnap.Tests;
 
 public class PixelMathTests
 {
-    // ----- helpers : image scRGB FP16, 4 canaux (RGBA), rowPitch = w * 8 octets -----
+    // ----- helpers: scRGB FP16 image, 4 channels (RGBA), rowPitch = w * 8 bytes -----
 
     static Half[] Solid(int w, int h, float r, float g, float b)
     {
@@ -46,7 +46,7 @@ public class PixelMathTests
     [Fact]
     public void EncodeRow_without_tone_writes_bgra_and_clips()
     {
-        // 3 pixels : rouge pur, blanc x2 (écrêté), noir
+        // 3 pixels: pure red, white x2 (clipped), black
         float[] rgb = { 1f, 0f, 0f,  2f, 2f, 2f,  0f, 0f, 0f };
         var bgra = new byte[3 * 4];
         Capturer.EncodeRow(rgb, bgra, 0, 3, tone: false, invWhite2: 0f);
@@ -56,7 +56,7 @@ public class PixelMathTests
     [Fact]
     public void EncodeRow_with_tone_dims_white()
     {
-        // Reinhard étendu, blanc = 3.0 : un pixel à 1.0 devient ~0.556 linéaire (~197 sRGB)
+        // Extended Reinhard, white = 3.0: a pixel at 1.0 becomes ~0.556 linear (~197 sRGB)
         float[] rgb = { 1f, 1f, 1f };
         var bgra = new byte[4];
         Capturer.EncodeRow(rgb, bgra, 0, 1, tone: true, invWhite2: 1f / 9f);
@@ -71,11 +71,11 @@ public class PixelMathTests
     [Fact]
     public void LuminanceStats_percentile_ignores_isolated_bright_pixel()
     {
-        const int w = 100, h = 100;              // 10 000 pixels -> les 1 plus lumineux ignorés
+        const int w = 100, h = 100;              // 10,000 pixels -> the brightest 1 is ignored
         var px = Solid(w, h, 1f, 1f, 1f);
         Set(px, w, 50, 50, 10f, 10f, 10f);
         var (p9999, max) = Pinned(px, p => Capturer.LuminanceStats(p, w * 8, w, h));
-        Assert.InRange(p9999, 1.0f, 1.02f);      // bord haut du bin contenant 1.0
+        Assert.InRange(p9999, 1.0f, 1.02f);      // top edge of the bin containing 1.0
         Assert.Equal(10f, max);
     }
 
@@ -91,13 +91,13 @@ public class PixelMathTests
         Assert.Equal(1f, max);
     }
 
-    // ----- ToneMapScRgbToBgra (chemin CPU) -----
+    // ----- ToneMapScRgbToBgra (CPU path) -----
 
     [Fact]
     public void ToneMapScRgbToBgra_keeps_sdr_white_at_255()
     {
         const int w = 4, h = 2;
-        var px = Solid(w, h, 1f, 1f, 1f);        // 1.0 scRGB = 80 nits = blanc SDR à 80 nits
+        var px = Solid(w, h, 1f, 1f, 1f);        // 1.0 scRGB = 80 nits = SDR white at 80 nits
         var bgra = Pinned(px, p => Capturer.ToneMapScRgbToBgra(p, w * 8, w, h, sdrNits: 80f, whiteY: 1f));
         Assert.All(bgra, b => Assert.Equal(255, b));
     }
@@ -105,15 +105,15 @@ public class PixelMathTests
     [Fact]
     public void ToneMapScRgbToBgra_sdr_branch_ignores_stray_bright_pixel()
     {
-        // Régression : un pixel isolé à 3.0 ne doit plus assombrir le blanc à ~197.
+        // Regression: a lone pixel at 3.0 must no longer darken the white to ~197.
         const int w = 8, h = 8;
         var px = Solid(w, h, 1f, 1f, 1f);
         Set(px, w, 3, 3, 3f, 3f, 3f);
         var bgra = Pinned(px, p => Capturer.ToneMapScRgbToBgra(p, w * 8, w, h, sdrNits: 80f, whiteY: 1f));
         int stray = (3 * w + 3) * 4;
-        Assert.Equal(255, bgra[stray]);           // le pixel à 3.0 est écrêté à 255
+        Assert.Equal(255, bgra[stray]);           // the pixel at 3.0 is clipped to 255
         for (int i = 0; i < bgra.Length; i++)
-            Assert.Equal(255, bgra[i]);           // et aucun autre pixel n'est assombri
+            Assert.Equal(255, bgra[i]);           // and no other pixel is darkened
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public class PixelMathTests
         const int w = 4, h = 1;
         var px = Solid(w, h, 1f, 1f, 1f);
         var bgra = Pinned(px, p => Capturer.ToneMapScRgbToBgra(p, w * 8, w, h, sdrNits: 80f, whiteY: 3f));
-        Assert.InRange(bgra[0], 190, 205);        // même courbe que EncodeRow_with_tone_dims_white
+        Assert.InRange(bgra[0], 190, 205);        // same curve as EncodeRow_with_tone_dims_white
         Assert.Equal(255, bgra[3]);
     }
 
@@ -134,9 +134,9 @@ public class PixelMathTests
         Set(px, w, 0, 0, float.NaN, float.NaN, float.NaN);
         Set(px, w, 1, 0, float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
         var bgra = Pinned(px, p => Capturer.ToneMapScRgbToBgra(p, w * 8, w, h, sdrNits: 80f, whiteY: 1f));
-        Assert.Equal(new byte[] { 0, 0, 0, 255 }, bgra[0..4]);          // NaN -> noir
-        Assert.Equal(new byte[] { 255, 255, 255, 255 }, bgra[4..8]);    // +Inf -> blanc
-        Assert.Equal(new byte[] { 255, 255, 255, 255 }, bgra[8..12]);   // voisin intact
+        Assert.Equal(new byte[] { 0, 0, 0, 255 }, bgra[0..4]);          // NaN -> black
+        Assert.Equal(new byte[] { 255, 255, 255, 255 }, bgra[4..8]);    // +Inf -> white
+        Assert.Equal(new byte[] { 255, 255, 255, 255 }, bgra[8..12]);   // neighbour intact
     }
 
     [Theory]

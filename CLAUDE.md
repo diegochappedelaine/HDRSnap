@@ -32,9 +32,11 @@ optimizations). Do not undo any of them.
 
 ## Conventions
 
-- Identifiers, UI strings and log messages in English; code comments may stay French.
+- Everything in the repo is English: identifiers, UI strings, log messages, code
+  comments and commit messages. Do not add French, and do not rewrite the older
+  French commits already in `git log`.
 - Package versions: wildcard major (`3.*`).
-- Commit messages in French, `Zone : description` (see `git log`).
+- Commit messages: `Area: description` (e.g. `Tray: ...`, `Icon: ...`).
 - Pixel math: scRGB linear, `1.0 = 80 nits`, 4 channels per pixel, row pitch
   in bytes. Any change to `LuminanceStats`, `ToneMapScRgbToBgra`, `ReadHdrRow`,
   `EncodeRow`, `SrgbByte` or `CopyBgra` needs a test in `PixelMathTests.cs`.

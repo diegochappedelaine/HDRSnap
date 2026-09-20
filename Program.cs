@@ -19,25 +19,25 @@ namespace HDRSnap;
 public class Config
 {
     public string Hotkey { get; set; } = "F11";
-    /// Raccourci pour capturer uniquement la fenêtre au premier plan ("" = désactivé).
+    /// Hotkey to capture only the foreground window ("" = disabled).
     public string WindowHotkey { get; set; } = "Ctrl+F11";
     public string OutputDir { get; set; } =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "HDRSnap");
     public bool CaptureCursor { get; set; } = false;
     public bool PlaySound { get; set; } = true;
-    /// Copie aussi la capture dans le presse-papiers (PNG + bitmap). Mode tray uniquement.
+    /// Also copies the capture to the clipboard (PNG + bitmap). Tray mode only.
     public bool CopyToClipboard { get; set; } = true;
     public bool SubfolderPerApp { get; set; } = true;
-    /// Marge au-dessus du blanc SDR allouée aux hautes lumières dans le PNG
-    /// (cible du tone mapping = TonemapHeadroom x blanc SDR, en nits).
+    /// Headroom above SDR white given to highlights in the PNG
+    /// (tone mapping target = TonemapHeadroom x SDR white, in nits).
     public float TonemapHeadroom { get; set; } = 1.25f;
 
     public static string Dir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "HDRSnap");
     public static string FilePath => Path.Combine(Dir, "config.json");
 
-    /// Avertissement du dernier Load (null si RAS). Journalisé par Program.Main :
-    /// Config ne journalise pas elle-même pour rester testable.
+    /// Warning from the last Load (null if none). Logged by Program.Main:
+    /// Config does not log by itself so that it stays testable.
     public static string LoadWarning { get; private set; }
 
     public static Config Load() => Load(FilePath);
@@ -57,40 +57,40 @@ public class Config
             {
                 LoadWarning = $"unreadable config ({path} : {ex.Message}) -> defaults, file kept";
             }
-            return new Config();   // ne JAMAIS écraser le fichier de l'utilisateur
+            return new Config();   // NEVER overwrite the user's file
         }
 
         var cfg = new Config();
         if (!cfg.Save(path))
             LoadWarning = $"default config not written ({path} : {LastSaveError})";
-        cfg.LoadedFromFile = true;   // ce fichier vient d'être écrit par nous : rien à préserver
+        cfg.LoadedFromFile = true;   // we wrote this file ourselves: nothing to preserve
         return cfg;
     }
 
-    /// Raison de la dernière écriture échouée (null si la dernière a réussi).
+    /// Why the last write failed (null if the last one succeeded).
     public static string LastSaveError { get; private set; }
 
-    /// Vrai seulement si cette instance vient d'un fichier réellement relu.
-    /// Champ (pas propriété) : System.Text.Json ne sérialise que les propriétés publiques.
+    /// True only if this instance came from a file that was really read back.
+    /// Field (not property): System.Text.Json only serialises public properties.
     internal bool LoadedFromFile;
 
     public bool Save() => Save(FilePath);
 
-    /// Écrit la config complète (indentée). false si l'écriture échoue ; l'appelant journalise.
-    /// Écriture atomique (fichier temporaire puis remplacement) : une coupure de courant ou
-    /// un disque plein ne laisse pas un config.json tronqué.
+    /// Writes the whole config (indented). false if the write fails; the caller logs.
+    /// Atomic write (temp file then replace): a power cut or a full disk cannot
+    /// leave a truncated config.json behind.
     public bool Save(string path)
     {
         LastSaveError = null;
         try
         {
-            // GetDirectoryName rend "" pour un nom nu et null pour une racine : dans les
-            // deux cas il n'y a pas de dossier à créer, et CreateDirectory lèverait.
+            // GetDirectoryName returns "" for a bare name and null for a root: in both
+            // cases there is no directory to create, and CreateDirectory would throw.
             var dir = Path.GetDirectoryName(Path.GetFullPath(path));
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
 
-            // Load conserve exprès un fichier qu'il n'a pas su lire ; l'écraser ici ferait
-            // perdre en silence les réglages que l'utilisateur y avait mis. On le sauve d'abord.
+            // Load deliberately keeps a file it could not read; overwriting it here would
+            // silently lose the settings the user had put in it. Back it up first.
             if (!LoadedFromFile && File.Exists(path))
                 File.Copy(path, path + ".bak", true);
 
@@ -103,7 +103,7 @@ public class Config
         catch (Exception ex) { LastSaveError = ex.Message; return false; }
     }
 
-    /// Recopie toutes les valeurs (rechargement à chaud : TrayApp garde la même instance).
+    /// Copies every value across (hot reload: TrayApp keeps the same instance).
     public void CopyFrom(Config o)
     {
         Hotkey = o.Hotkey; WindowHotkey = o.WindowHotkey; OutputDir = o.OutputDir;
@@ -111,19 +111,19 @@ public class Config
         SubfolderPerApp = o.SubfolderPerApp; TonemapHeadroom = o.TonemapHeadroom;
     }
 
-    /// Valeurs nulles/vides (ex. "Hotkey": null dans le JSON) -> défauts.
+    /// Null/empty values (e.g. "Hotkey": null in the JSON) -> defaults.
     Config Sanitized()
     {
         if (string.IsNullOrWhiteSpace(Hotkey)) Hotkey = "F11";
         if (string.IsNullOrWhiteSpace(OutputDir)) OutputDir = new Config().OutputDir;
-        WindowHotkey ??= "";   // null = désactivé, pas un plantage
+        WindowHotkey ??= "";   // null = disabled, not a crash
         return this;
     }
 
-    /// "Ctrl+Shift+F11" -> (mods, vk). Bits de mods : Alt=1, Ctrl=2, Shift=4, Win=8
-    /// (mêmes valeurs que MOD_* de RegisterHotKey, comparées par TrayApp.FindHotkey).
-    /// false + message si aucune touche, plusieurs touches, ou nom de touche inconnu
-    /// (noms = membres de System.Windows.Forms.Keys, insensibles à la casse).
+    /// "Ctrl+Shift+F11" -> (mods, vk). Modifier bits: Alt=1, Ctrl=2, Shift=4, Win=8
+    /// (same values as RegisterHotKey's MOD_*, compared by TrayApp.FindHotkey).
+    /// false + message if there is no key, several keys, or an unknown key name
+    /// (names = System.Windows.Forms.Keys members, case-insensitive).
     public bool TryParseHotkey(out uint mods, out uint vk, out string error)
         => TryParseHotkey(Hotkey, out mods, out vk, out error);
 
@@ -142,15 +142,15 @@ public class Config
                 case "shift": mods |= 0x4; break;
                 case "win": mods |= 0x8; break;
                 default:
-                    // Enum.TryParse accepte aussi la forme numérique : « 1 » donnerait
-                    // Keys.LButton (vk 1), un hotkey accepté mais que le hook clavier
-                    // ne verra jamais. On exige un nom de membre (« D1 », pas « 1 »).
+                    // Enum.TryParse also accepts the numeric form: "1" would give
+                    // Keys.LButton (vk 1), a hotkey that parses but that the keyboard
+                    // hook will never see. Require a member name ("D1", not "1").
                     if (char.IsDigit(part[0]) || part[0] == '-' || part[0] == '+')
                     { error = $"numeric key \"{part}\" (use the Keys member name, e.g. D1)"; return false; }
                     if (!Enum.TryParse<Keys>(part, true, out var k) || !Enum.IsDefined(typeof(Keys), k))
                     { error = $"unknown key \"{part}\""; return false; }
-                    // Un code de touche virtuelle tient sur 1..254 ; au-delà (Keys.Modifiers,
-                    // 0xFFFF0000) aucune frappe ne peut correspondre.
+                    // A virtual-key code fits in 1..254; beyond that (Keys.Modifiers,
+                    // 0xFFFF0000) no keystroke can ever match.
                     if ((uint)k == 0 || (uint)k > 0xFE)
                     { error = $"key \"{part}\" outside the virtual-key range (1-254)"; return false; }
                     if (key != null)
@@ -200,7 +200,7 @@ internal static class Native
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
     }
 
-    // --- DisplayConfig (niveau de blanc SDR du moniteur) ---
+    // --- DisplayConfig (monitor SDR white level) ---
     [DllImport("user32.dll")] public static extern int GetDisplayConfigBufferSizes(uint flags, out uint numPaths, out uint numModes);
     [DllImport("user32.dll")]
     public static extern int QueryDisplayConfig(uint flags, ref uint numPaths, [Out] DISPLAYCONFIG_PATH_INFO[] paths,
@@ -218,7 +218,7 @@ internal static class Native
     {
         public LUID adapterId;
         public uint id, modeInfoIdx, outputTechnology, rotation, scaling;
-        public uint refreshRateNumerator, refreshRateDenominator; // DISPLAYCONFIG_RATIONAL : 2 x UINT32, aligné 4 (pas ulong : forcerait un padding de 8)
+        public uint refreshRateNumerator, refreshRateDenominator; // DISPLAYCONFIG_RATIONAL: 2 x UINT32, 4-aligned (not ulong: that would force 8 bytes of padding)
         public uint scanLineOrdering;
         public int targetAvailable;
         public uint statusFlags;
@@ -248,11 +248,11 @@ internal static class Native
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string viewGdiDeviceName;
     }
 
-    /// Niveau de blanc SDR du moniteur en nits (slider Windows "luminosité SDR").
-    /// L'API DisplayConfig renvoyait ERROR_INVALID_PARAMETER tant que
-    /// DISPLAYCONFIG_PATH_TARGET_INFO faisait 56 octets au lieu de 48 (refreshRate déclaré
-    /// en ulong) : la faute était ici, pas dans la build de Windows. Tailles verrouillées
-    /// par InteropLayoutTests. Replis conservés : registre (MonitorDataStore), puis 200 nits.
+    /// Monitor SDR white level in nits (the Windows "SDR content brightness" slider).
+    /// The DisplayConfig API kept returning ERROR_INVALID_PARAMETER as long as
+    /// DISPLAYCONFIG_PATH_TARGET_INFO was 56 bytes instead of 48 (refreshRate declared
+    /// as ulong): the fault was here, not in the Windows build. Sizes are pinned by
+    /// InteropLayoutTests. Fallbacks kept: registry (MonitorDataStore), then 200 nits.
     public static (float nits, string source) GetSdrWhite(IntPtr hMonitor)
     {
         float? v = SdrWhiteFromDisplayConfig(hMonitor);
@@ -329,8 +329,8 @@ internal static class Native
                     Program.Log($"SDR white: GET_SDR_WHITE_LEVEL failed (error {rc}) for {mi.szDevice} -> registry fallback");
                     continue;
                 }
-                // Même garde que le repli registre : une valeur hors plage (0 sur une cible
-                // clonée inactive) donnerait un blanc nul et une image NaN en aval.
+                // Same guard as the registry fallback: an out-of-range value (0 on an
+                // inactive cloned target) would give a null white and NaN pixels downstream.
                 if (sdr.SDRWhiteLevel < 1000 || sdr.SDRWhiteLevel > 10000)
                 {
                     Program.Log($"SDR white: API value out of range ({sdr.SDRWhiteLevel}) for {mi.szDevice}, target ignored");
@@ -371,7 +371,7 @@ internal static class Capturer
     static ID2D1Device _d2dDevice;
     static ID2D1DeviceContext _d2d;
 
-    /// Debug (--forcetonemap) : passe par le tone mapper D2D même si la frame reste en plage SDR.
+    /// Debug (--forcetonemap): go through the D2D tone mapper even if the frame stays in SDR range.
     public static bool ForceToneMap;
 
     static void EnsureDevice()
@@ -411,34 +411,34 @@ internal static class Capturer
         _d2d = null; _d2dDevice = null; _winrtDevice = null; _context = null; _device = null;
     }
 
-    /// hwnd : fenêtre à capturer en mode Window ; IntPtr.Zero = celle au premier plan.
+    /// hwnd: window to capture in Window mode; IntPtr.Zero = the foreground one.
     public static string CaptureToFile(Config cfg, CaptureMode mode = CaptureMode.Monitor, IntPtr hwnd = default)
     {
         try { return CaptureToFileCore(cfg, mode, hwnd); }
         catch (Exception ex) when (IsDeviceError(ex))
         {
-            // device perdu (TDR / mise à jour pilote) : reset et 2e tentative
+            // device lost (TDR / driver update): reset and second attempt
             Program.Log($"capture failed ({ex.GetType().Name}: {ex.Message}) -> device reset, second attempt");
             ResetDevice();
             return CaptureToFileCore(cfg, mode, hwnd);
         }
         catch (TimeoutException) when (mode == CaptureMode.Monitor)
         {
-            // Après un TDR, WGC cesse souvent de livrer des frames sans lever d'erreur COM.
-            // Le device est gardé en statique : sans reset il resterait mort pour TOUTES
-            // les captures suivantes. On le jette, mais sans relancer la capture (pas de
-            // seconde attente de 3 s) : la frappe suivante repartira sur un device neuf.
-            // Réservé à l'écran : une fenêtre non capturable (WDA_EXCLUDEFROMCAPTURE, fenêtre
-            // élevée) ne livre jamais de frame sans que le device soit en cause, et détruire
-            // le device partagé pénaliserait toutes les captures suivantes.
+            // After a TDR, WGC often stops delivering frames without raising a COM error.
+            // The device is held in a static: without a reset it would stay dead for EVERY
+            // later capture. Throw it away, but do not restart the capture (no second 3 s
+            // wait): the next keystroke will start again on a fresh device.
+            // Screen only: a window that cannot be captured (WDA_EXCLUDEFROMCAPTURE, an
+            // elevated window) never delivers a frame without the device being at fault,
+            // and destroying the shared device would penalise every later capture.
             Program.Log("capture failed (timeout) -> device reset, no second attempt");
             ResetDevice();
             throw;
         }
     }
 
-    /// Seules les erreurs D3D/DXGI/WinRT justifient un reset du device + retry.
-    /// Timeout de frame, E/S disque, chemin invalide : on échoue tout de suite.
+    /// Only D3D/DXGI/WinRT errors justify resetting the device and retrying.
+    /// Frame timeout, disk I/O, invalid path: fail straight away.
     internal static bool IsDeviceError(Exception ex) =>
         ex is SharpGen.Runtime.SharpGenException || ex is COMException;
 
@@ -450,7 +450,7 @@ internal static class Capturer
         IntPtr hwndTarget = IntPtr.Zero, hmon;
         if (mode == CaptureMode.Window)
         {
-            // hwnd fourni par l'appelant (menu du tray) sinon la fenêtre au premier plan (hotkey).
+            // hwnd supplied by the caller (tray menu), otherwise the foreground window (hotkey).
             hwndTarget = hwnd != IntPtr.Zero ? hwnd : Native.GetForegroundWindow();
             if (hwndTarget == IntPtr.Zero) throw new InvalidOperationException("No foreground window.");
             hmon = Native.MonitorFromWindow(hwndTarget, 2 /* MONITOR_DEFAULTTONEAREST */);
@@ -520,16 +520,16 @@ internal static class Capturer
                     bgra = CopyBgra(map.DataPointer, (int)map.RowPitch, w, h);
                 else
                 {
-                    float scale = 80f / Math.Max(sdrNits, 40f); // blanc SDR -> 1.0
+                    float scale = 80f / Math.Max(sdrNits, 40f); // SDR white -> 1.0
                     var (maxRaw, absMax) = LuminanceStats(map.DataPointer, (int)map.RowPitch, w, h); // scRGB (1.0 = 80 nits)
                     if (maxRaw * scale <= 1.02f && !ForceToneMap)
                     {
-                        // rien de significatif au-dessus du blanc SDR : simple remise à l'échelle
+                        // nothing significant above SDR white: just rescale
                         Program.Log($"SDR range, no tone mapping (p99.99 = {maxRaw * 80f:0} nits, max = {absMax * 80f:0} nits)");
-                        // heuristique valable pour une capture écran seulement
+                        // heuristic only valid for a screen capture
                         if (mode == CaptureMode.Monitor)
                             WarnIfLooksLikeDesktop(fgName, fgExe, maxRaw * 80f, absMax * 80f, sdrNits);
-                        bgra = ToneMapScRgbToBgra(map.DataPointer, (int)map.RowPitch, w, h, sdrNits, 1f); // écrêtage, pas de Reinhard
+                        bgra = ToneMapScRgbToBgra(map.DataPointer, (int)map.RowPitch, w, h, sdrNits, 1f); // clipping, no Reinhard
                     }
                     else
                     {
@@ -542,7 +542,7 @@ internal static class Capturer
                         }
                         catch (Exception ex)
                         {
-                            ResetD2D();   // le device D2D peut être coincé : EnsureD2D le recréera
+                            ResetD2D();   // the D2D device may be stuck: EnsureD2D will recreate it
                             Program.Log($"D2D tone map failed ({ex.Message}) -> CPU fallback (white = p99.99 = {maxRaw * scale:0.00} x SDR white; <= 1.005 => plain clipping)");
                             bgra = ToneMapScRgbToBgra(map.DataPointer, (int)map.RowPitch, w, h, sdrNits, maxRaw * scale);
                         }
@@ -602,13 +602,13 @@ internal static class Capturer
 
     // --- Pixels ---
 
-    /// Luminance de la frame en unités scRGB (1.0 = 80 nits), NaN/Inf ignorés.
-    /// p9999 = percentile 99,99 (MaxCLL robuste, comme le sample Microsoft) — un pixel
-    /// parasite isolé ne doit pas dicter la courbe de tone mapping de toute l'image.
+    /// Frame luminance in scRGB units (1.0 = 80 nits), NaN/Inf ignored.
+    /// p9999 = 99.99th percentile (robust MaxCLL, as in the Microsoft sample) - one stray
+    /// pixel must not dictate the tone mapping curve for the whole image.
     internal static unsafe (float p9999, float max) LuminanceStats(IntPtr data, int rowPitch, int w, int h)
     {
         const int bins = 4096;
-        const float range = 32f; // 0..32 scRGB = 0..2560 nits, au-delà -> dernier bin
+        const float range = 32f; // 0..32 scRGB = 0..2560 nits, beyond that -> last bin
         int stripes = Math.Min(Math.Max(1, Environment.ProcessorCount), h);
         var hists = new int[stripes][];
         var maxes = new float[stripes];
@@ -643,7 +643,7 @@ internal static class Capturer
             if (hists[s] != null)
                 for (int i = 0; i < bins; i++) { total[i] += hists[s][i]; n += hists[s][i]; }
 
-        long ignore = n / 10000; // les 0,01 % les plus lumineux
+        long ignore = n / 10000; // the brightest 0.01 %
         long acc = 0;
         int top = bins - 1;
         for (; top > 0; top--) { acc += total[top]; if (acc > ignore) break; }
@@ -652,8 +652,8 @@ internal static class Capturer
         return (Math.Min((top + 1) * (range / bins), max), max);
     }
 
-    /// Tone mapping par l'effet Direct2D « HDR Tone Map » (celui de Photos/Snipping Tool) :
-    /// scRGB [0..maxNits] -> [0..targetNits] sur GPU, puis blanc = targetNits à l'encodage sRGB.
+    /// Tone mapping through the Direct2D "HDR Tone Map" effect (the one Photos/Snipping Tool use):
+    /// scRGB [0..maxNits] -> [0..targetNits] on the GPU, then white = targetNits at sRGB encoding.
     static unsafe byte[] ToneMapWithD2D(ID3D11Texture2D srcTex, int w, int h, float maxNits, float targetNits)
     {
         EnsureD2D();
@@ -699,9 +699,9 @@ internal static class Capturer
             _d2d.DrawImage(toneMap.Output);
             _d2d.EndDraw().CheckError();
         }
-        finally { _d2d.Target = null; }   // sinon la cible pointe sur un bitmap disposé
+        finally { _d2d.Target = null; }   // otherwise the target points at a disposed bitmap
 
-        // lecture CPU + encodage sRGB (le blanc de sortie du tonemap = targetNits -> 1.0)
+        // CPU readback + sRGB encoding (the tone map's output white = targetNits -> 1.0)
         texDesc.BindFlags = BindFlags.None;
         texDesc.Usage = ResourceUsage.Staging;
         texDesc.CPUAccessFlags = CpuAccessFlags.Read;
@@ -722,14 +722,14 @@ internal static class Capturer
         finally { _context.Unmap(staging, 0); }
     }
 
-    // Chemin CPU : scRGB FP16 (linéaire, 1.0 = 80 nits) -> BGRA8 sRGB.
-    // whiteY = blanc du Reinhard étendu, en unités de blanc SDR (1.0 = sdrNits).
-    // whiteY <= 1.005 => aucune compression, simple écrêtage à 1.0 (chemin « plage SDR »).
-    // L'appelant fournit le p99,99 (pas le max absolu) pour qu'un pixel isolé ne dicte
-    // pas la courbe de toute l'image.
+    // CPU path: scRGB FP16 (linear, 1.0 = 80 nits) -> BGRA8 sRGB.
+    // whiteY = extended Reinhard white, in SDR white units (1.0 = sdrNits).
+    // whiteY <= 1.005 => no compression, just clipping at 1.0 (the "SDR range" path).
+    // The caller passes the 99.99th percentile (not the absolute max) so that a lone
+    // pixel does not dictate the curve for the whole image.
     internal static unsafe byte[] ToneMapScRgbToBgra(IntPtr data, int rowPitch, int w, int h, float sdrNits, float whiteY)
     {
-        float scale = 80f / Math.Max(sdrNits, 40f); // blanc SDR -> 1.0
+        float scale = 80f / Math.Max(sdrNits, 40f); // SDR white -> 1.0
         var rgb = new float[(long)w * h * 3];
         Parallel.For(0, h, y => ReadHdrRow((byte*)data + (long)y * rowPitch, rgb, y * w * 3, w, scale));
 
@@ -752,7 +752,7 @@ internal static class Capturer
         }
     }
 
-    /// NaN -> 0, négatif -> 0, +Inf -> max d'un Half (65504, écrêté en blanc à l'encodage).
+    /// NaN -> 0, negative -> 0, +Inf -> Half's max (65504, clipped to white at encoding).
     internal static float Sane(float v) => float.IsNaN(v) ? 0f : Math.Clamp(v, 0f, 65504f);
 
     internal static void EncodeRow(float[] rgb, byte[] bgra, int y, int w, bool tone, float invWhite2)
@@ -766,7 +766,7 @@ internal static class Capturer
                 float lum = 0.2126f * r + 0.7152f * g + 0.0722f * b;
                 if (lum > 0f)
                 {
-                    // Reinhard étendu sur toute la plage : L' = L(1 + L/whiteY²)/(1 + L)
+                    // Extended Reinhard over the whole range: L' = L(1 + L/whiteY^2)/(1 + L)
                     float ratio = (1f + lum * invWhite2) / (1f + lum);
                     r *= ratio; g *= ratio; b *= ratio;
                 }
@@ -794,7 +794,7 @@ internal static class Capturer
             fixed (byte* dst = &bgra[(long)y * w * 4])
             {
                 Buffer.MemoryCopy((byte*)data + (long)y * rowPitch, dst, w * 4, w * 4);
-                for (int x = 3; x < w * 4; x += 4) dst[x] = 255; // alpha opaque
+                for (int x = 3; x < w * 4; x += 4) dst[x] = 255; // opaque alpha
             }
         });
         return bgra;
@@ -802,7 +802,7 @@ internal static class Capturer
 
     static string SavePng(byte[] bgra, int w, int h, Config cfg, string appName)
     {
-        // un sous-dossier par jeu/app au premier plan, sinon racine
+        // one subfolder per foreground game/app, root otherwise
         string dir = string.IsNullOrWhiteSpace(appName) ? cfg.OutputDir : Path.Combine(cfg.OutputDir, appName);
         Directory.CreateDirectory(dir);
         string stamp = DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss");
@@ -822,8 +822,8 @@ internal static class Capturer
         return path;
     }
 
-    /// Nom (assaini pour servir de nom de dossier) et chemin de l'exe au premier plan.
-    /// name == null pour le bureau ou HDRSnap lui-meme : pas de sous-dossier dans ce cas.
+    /// Name (sanitised for use as a folder name) and exe path of the foreground process.
+    /// name == null for the desktop or for HDRSnap itself: no subfolder in that case.
     static (string name, string exe) ForegroundApp()
     {
         try
@@ -841,8 +841,8 @@ internal static class Capturer
         catch { return (null, null); }
     }
 
-    /// QueryFullProcessImageName plutot que MainModule : marche aussi sur les jeux
-    /// proteges (Denuvo, anti-triche) ou l'acces aux modules est refuse.
+    /// QueryFullProcessImageName rather than MainModule: it also works on protected
+    /// games (Denuvo, anti-cheat) where module access is denied.
     static string ExePath(uint pid)
     {
         IntPtr h = Native.OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
@@ -856,9 +856,9 @@ internal static class Capturer
         finally { Native.CloseHandle(h); }
     }
 
-    /// Les Fullscreen Optimizations convertissent le plein ecran exclusif en flip compose
-    /// par le DWM : c'est ce qui rend la capture WGC possible en jeu. La case "desactiver
-    /// les optimisations du mode plein ecran" ecrit ce flag de compat, par exe.
+    /// Fullscreen optimizations turn exclusive fullscreen into a flip composed by the
+    /// DWM: that is what makes WGC capture possible in games at all. The "disable
+    /// fullscreen optimizations" checkbox writes this compat flag, per exe.
     static bool FsoDisabled(string exe)
     {
         if (string.IsNullOrEmpty(exe)) return false;
@@ -877,17 +877,17 @@ internal static class Capturer
         return false;
     }
 
-    /// Heuristique : en plein ecran *vraiment* exclusif, WGC rend le bureau compose
-    /// derriere le jeu, ecrete pile au blanc SDR. Si un jeu est au premier plan et que
-    /// rien ne depasse ce plafond, la capture est probablement le bureau, pas le jeu.
-    /// Faux positif possible sur une scene sombre entierement sous le blanc SDR : on
-    /// journalise seulement (aucune bulle), le PNG est enregistre normalement.
+    /// Heuristic: in *truly* exclusive fullscreen, WGC renders the composed desktop
+    /// behind the game, clipped exactly at SDR white. If a game is in the foreground
+    /// and nothing goes above that ceiling, the capture is probably the desktop.
+    /// False positive possible on a dark scene entirely below SDR white: we only log
+    /// (no balloon), the PNG is saved normally.
     static void WarnIfLooksLikeDesktop(string fgName, string fgExe, float p9999Nits, float maxNits, float sdrNits)
     {
-        if (fgName == null) return;                        // bureau au premier plan : normal
+        if (fgName == null) return;                        // desktop in the foreground: normal
         float tol = sdrNits * 0.005f;
-        if (Math.Abs(maxNits - sdrNits) > tol) return;     // ca depasse le blanc SDR : vraie frame de jeu
-        if (Math.Abs(p9999Nits - sdrNits) > tol) return;   // pas ecrete a plat
+        if (Math.Abs(maxNits - sdrNits) > tol) return;     // above SDR white: a real game frame
+        if (Math.Abs(p9999Nits - sdrNits) > tol) return;   // not clipped flat
 
         string msg = $"{fgName} is in the foreground but the frame is clipped exactly at SDR white "
                    + $"({sdrNits:0} nits): this is probably the desktop, not the game.";
@@ -909,32 +909,32 @@ internal class TrayApp : Form
     string _lastFile;
     bool _busy;
 
-    // Hotkey via hook clavier bas niveau plutot que RegisterHotKey : un jeu qui
-    // s'enregistre en raw input avec RIDEV_NOHOTKEYS (Pragmata) desactive tous les
-    // hotkeys applicatifs tant qu'il a le focus - RegisterHotKey reste « enregistree »
-    // mais WM_HOTKEY n'arrive jamais. Le hook, lui, est appele avant cette etape.
+    // Hotkey through a low-level keyboard hook rather than RegisterHotKey: a game that
+    // registers for raw input with RIDEV_NOHOTKEYS (Pragmata) disables every application
+    // hotkey while it has focus - RegisterHotKey stays "registered" but WM_HOTKEY never
+    // arrives. The hook runs before that stage.
     Native.LowLevelKeyboardProc _hookProc;
     IntPtr _hook = IntPtr.Zero;
     internal readonly record struct HotkeyBinding(uint Mods, uint Vk, string Label, CaptureMode Mode);
-    HotkeyBinding[] _hotkeys = Array.Empty<HotkeyBinding>();   // [0] = écran (toujours), [1] = fenêtre (si activée)
-    uint _heldVk;   // vk de la hotkey enfoncée (anti auto-répétition), 0 sinon
-    IntPtr _fgBeforeMenu;   // fenêtre au premier plan juste avant l'ouverture du menu du tray
+    HotkeyBinding[] _hotkeys = Array.Empty<HotkeyBinding>();   // [0] = screen (always), [1] = window (if enabled)
+    uint _heldVk;   // vk of the held hotkey (auto-repeat guard), 0 otherwise
+    IntPtr _fgBeforeMenu;   // foreground window just before the tray menu opens
     ToolStripMenuItem _miScreen, _miWindow;
     FileSystemWatcher _watcher;
-    System.Windows.Forms.Timer _reloadDebounce;   // les éditeurs écrivent en plusieurs fois
-    int _reloadRetries;   // relectures déjà tentées sur un fichier verrouillé / incomplet
-    // Windows retire un hook LL sans prévenir s'il dépasse LowLevelHooksTimeout
-    // (pause GC, thread UI occupé pendant un appui). Aucune API ne permet de le
-    // savoir : on le réinstalle périodiquement, sur le thread UI.
+    System.Windows.Forms.Timer _reloadDebounce;   // editors write in several passes
+    int _reloadRetries;   // re-reads already attempted on a locked / incomplete file
+    // Windows drops a LL hook without warning if it exceeds LowLevelHooksTimeout
+    // (GC pause, UI thread busy during a keypress). No API lets you find out:
+    // reinstall it periodically, on the UI thread.
     System.Windows.Forms.Timer _rehook;
-    bool _rearmFailed;   // évite de journaliser la même panne de réarmement chaque minute
+    bool _rearmFailed;   // avoids logging the same re-arm failure every minute
 
-    /// Icone embarquee plutot que ExtractAssociatedIcon : celui-ci ne rend que du 32x32,
-    /// alors que la zone de notification veut la taille systeme (16 en 100 %, 24 en 150 %).
+    /// Embedded icon rather than ExtractAssociatedIcon: that one only yields 32x32,
+    /// while the notification area wants the system size (16 at 100 %, 20 at 125 %).
     static Icon AppIcon()
     {
-        // Journalise le repli : sans ca, une ressource absente ou un ICO illisible
-        // se traduit juste par « l'icone Windows par defaut », sans rien pour le dire.
+        // Log the fallback: without it, a missing resource or an unreadable ICO just
+        // shows up as "the default Windows icon", with nothing to say so.
         var want = SystemInformation.SmallIconSize;
         try
         {
@@ -965,9 +965,9 @@ internal class TrayApp : Form
 
         var menu = new ContextMenuStrip();
         _miScreen = new ToolStripMenuItem("", null, (_, _) => Shoot(CaptureMode.Monitor));
-        // _fgBeforeMenu : à l'ouverture du menu, WinForms met AU PREMIER PLAN une fenêtre
-        // cachée de HDRSnap (sinon le menu ne se referme pas), donc GetForegroundWindow au
-        // moment du clic rendrait notre propre fenêtre. On réutilise celle notée au clic.
+        // _fgBeforeMenu: when the menu opens, WinForms brings a hidden HDRSnap window TO
+        // THE FOREGROUND (otherwise the menu never closes), so GetForegroundWindow at
+        // click time would return our own window. Reuse the one noted on mouse down.
         _miWindow = new ToolStripMenuItem("", null, (_, _) => Shoot(CaptureMode.Window, _fgBeforeMenu));
         menu.Items.Add(_miScreen);
         menu.Items.Add(_miWindow);
@@ -984,7 +984,7 @@ internal class TrayApp : Form
             Visible = true,
             ContextMenuStrip = menu,
         };
-        // Noté au clic : à cet instant la fenêtre de l'utilisateur est encore au premier plan.
+        // Noted on mouse down: at that instant the user's window is still in the foreground.
         RefreshHotkeyLabels();
         _tray.MouseDown += (_, _) => _fgBeforeMenu = Native.GetForegroundWindow();
         _tray.DoubleClick += (_, _) => OpenFolder();
@@ -994,8 +994,8 @@ internal class TrayApp : Form
                 Process.Start("explorer.exe", $"/select,\"{_lastFile}\"");
         };
 
-        // Avant InstallHook : le shell n'affiche qu'un ballon à la fois par icône, et
-        // l'échec du hook (aucun hotkey ne marche) prime sur le repli F11.
+        // Before InstallHook: the shell shows only one balloon at a time per icon, and
+        // a hook failure (no hotkey works at all) outranks the F11 fallback.
         if (hkWarnings.Count > 0)
             _tray.ShowBalloonTip(6000, "HDRSnap — hotkey", string.Join("\n", hkWarnings), ToolTipIcon.Warning);
 
@@ -1024,9 +1024,9 @@ internal class TrayApp : Form
 
     void OnConfigFileChanged(object sender, FileSystemEventArgs e)
     {
-        // événement sur un thread du pool -> retour au thread UI, puis anti-rebond.
-        // La fenêtre peut être détruite entre le test et l'appel (quit pendant une
-        // écriture) : sans catch, l'exception tuerait le process sur un thread du pool.
+        // event on a pool thread -> back to the UI thread, then debounce.
+        // The window can be destroyed between the test and the call (quit during a
+        // write): without the catch, the exception would kill the process on a pool thread.
         try
         {
             if (IsHandleCreated) BeginInvoke(new Action(() => { _reloadDebounce.Stop(); _reloadDebounce.Start(); }));
@@ -1037,29 +1037,29 @@ internal class TrayApp : Form
 
     void ReloadConfig()
     {
-        // Beaucoup d'éditeurs enregistrent en atomique (temporaire puis renommage) : le
-        // fichier disparaît un instant. Config.Load() en profiterait pour ÉCRIRE des
-        // défauts et on les appliquerait. On ne fait rien : l'événement du renommage suivra.
+        // Many editors save atomically (temp file then rename): the file disappears for
+        // an instant. Config.Load() would take that chance to WRITE defaults and we would
+        // apply them. Do nothing: the rename event will follow.
         if (!File.Exists(Config.FilePath)) return;
 
         var fresh = Config.Load();
         if (Config.LoadWarning != null)
         {
-            // Fichier peut-être encore verrouillé ou écrit à moitié : on retente avant de crier.
+            // File may still be locked or half-written: retry before complaining.
             if (_reloadRetries++ < 2) { _reloadDebounce.Start(); return; }
             _reloadRetries = 0;
             Program.Log("WARNING " + Config.LoadWarning);
-            // Ce qui est sur le disque n'est plus ce qu'on a lu : un Save() devra le sauvegarder.
+            // What is on disk is no longer what we read: a Save() will have to back it up.
             _cfg.LoadedFromFile = false;
             _tray.ShowBalloonTip(5000, "HDRSnap — config not reloaded", Config.LoadWarning, ToolTipIcon.Warning);
-            return;                                  // on garde les réglages précédents
+            return;                                  // keep the previous settings
         }
         _reloadRetries = 0;
-        // nos propres Save() (ChooseFolder) et les événements en double : rien à faire si identique
+        // our own Save() calls (ChooseFolder) and duplicate events: nothing to do if identical
         if (JsonSerializer.Serialize(fresh) == JsonSerializer.Serialize(_cfg)) return;
 
         _cfg.CopyFrom(fresh);
-        _cfg.LoadedFromFile = true;   // nos valeurs viennent bien du fichier actuel
+        _cfg.LoadedFromFile = true;   // our values do come from the current file
         var (table, warnings) = BuildHotkeys(_cfg);
         _hotkeys = table;
         foreach (var w in warnings) Program.Log("ERR " + w);
@@ -1073,8 +1073,8 @@ internal class TrayApp : Form
 
     void InstallHook()
     {
-        _ = Handle;             // force la creation du handle (la fenetre reste invisible)
-        _hookProc ??= HookProc; // reference gardee, sinon le GC collecte le delegue
+        _ = Handle;             // forces handle creation (the window stays invisible)
+        _hookProc ??= HookProc; // keep a reference, otherwise the GC collects the delegate
         _hook = Native.SetWindowsHookEx(13 /* WH_KEYBOARD_LL */, _hookProc, IntPtr.Zero, 0);
         if (_hook == IntPtr.Zero)
         {
@@ -1086,13 +1086,13 @@ internal class TrayApp : Form
 
     void ReinstallHook()
     {
-        // Installer AVANT de retirer : un échec passager de SetWindowsHookEx ne doit pas
-        // détruire un hook qui fonctionnait. Les deux coexistent un instant, sans risque
-        // de double capture (même délégué, et _heldVk bloque le second appel).
+        // Install BEFORE removing: a transient SetWindowsHookEx failure must not destroy
+        // a hook that was working. The two coexist for a moment, with no risk of double
+        // capture (same delegate, and _heldVk blocks the second call).
         IntPtr fresh = Native.SetWindowsHookEx(13 /* WH_KEYBOARD_LL */, _hookProc, IntPtr.Zero, 0);
         if (fresh == IntPtr.Zero)
         {
-            if (!_rearmFailed)   // une ligne par panne, pas une par minute
+            if (!_rearmFailed)   // one line per failure, not one per minute
             {
                 _rearmFailed = true;
                 Program.Log($"ERR re-arming the keyboard hook failed (err {Marshal.GetLastWin32Error()}), previous hook kept");
@@ -1102,8 +1102,8 @@ internal class TrayApp : Form
 
         if (_hook != IntPtr.Zero) Native.UnhookWindowsHookEx(_hook);
         _hook = fresh;
-        // Si le hook est tombé alors que la touche était enfoncée, le KEYUP s'est perdu
-        // et _heldVk resterait positionné : la frappe suivante serait avalée sans capturer.
+        // If the hook died while the key was held, the KEYUP was lost and _heldVk would
+        // stay set: the next keystroke would be swallowed without capturing anything.
         _heldVk = 0;
         if (_rearmFailed)
         {
@@ -1117,7 +1117,7 @@ internal class TrayApp : Form
         if (nCode >= 0)
         {
             int msg = (int)wParam;
-            uint vk = (uint)Marshal.ReadInt32(lParam);   // KBDLLHOOKSTRUCT.vkCode, 1er champ
+            uint vk = (uint)Marshal.ReadInt32(lParam);   // KBDLLHOOKSTRUCT.vkCode, first field
             if (msg == 0x0101 /* WM_KEYUP */ || msg == 0x0105 /* WM_SYSKEYUP */)
             {
                 if (vk == _heldVk) _heldVk = 0;
@@ -1131,18 +1131,18 @@ internal class TrayApp : Form
                     {
                         _heldVk = vk;
                         var mode = _hotkeys[i].Mode;
-                        // on rend la main tout de suite : Windows désactive un hook trop lent
+                        // hand back control at once: Windows disables a hook that is too slow
                         BeginInvoke(new Action(() => Shoot(mode)));
                     }
-                    return (IntPtr)1;   // touche avalée, le jeu ne la voit pas
+                    return (IntPtr)1;   // key swallowed, the game never sees it
                 }
             }
         }
         return Native.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
     }
 
-    /// Table des hotkeys depuis la config. Hotkey invalide -> repli F11 ;
-    /// WindowHotkey invalide ou identique à Hotkey -> capture fenêtre désactivée.
+    /// Hotkey table from the config. Invalid Hotkey -> F11 fallback;
+    /// WindowHotkey invalid or identical to Hotkey -> window capture disabled.
     internal static (HotkeyBinding[] table, List<string> warnings) BuildHotkeys(Config cfg)
     {
         var warnings = new List<string>();
@@ -1168,7 +1168,7 @@ internal class TrayApp : Form
         return (list.ToArray(), warnings);
     }
 
-    /// Bits des modificateurs enfoncés, mêmes valeurs que Config.TryParseHotkey (Alt=1, Ctrl=2, Shift=4, Win=8).
+    /// Bits of the held modifiers, same values as Config.TryParseHotkey (Alt=1, Ctrl=2, Shift=4, Win=8).
     static uint CurrentMods()
     {
         static bool Down(int vk) => (Native.GetAsyncKeyState(vk) & 0x8000) != 0;
@@ -1180,7 +1180,7 @@ internal class TrayApp : Form
         return m;
     }
 
-    /// Index de la hotkey dont la touche ET les modificateurs correspondent exactement, -1 sinon.
+    /// Index of the hotkey whose key AND modifiers match exactly, -1 otherwise.
     internal static int FindHotkey(HotkeyBinding[] table, uint vk, uint modsDown)
     {
         for (int i = 0; i < table.Length; i++)
@@ -1194,7 +1194,7 @@ internal class TrayApp : Form
     {
         if (_busy) return;
         _busy = true;
-        // hors du thread UI pour ne pas bloquer la pompe de messages
+        // off the UI thread so the message pump is not blocked
         Task.Run(() =>
         {
             try
@@ -1202,11 +1202,11 @@ internal class TrayApp : Form
                 string path = Capturer.CaptureToFile(_cfg, mode, hwnd);
                 _lastFile = path;
                 Program.Log($"OK {path}");
-                // Le son d'abord : retour immédiat, sans attendre le presse-papiers.
+                // Sound first: immediate feedback, without waiting for the clipboard.
                 if (_cfg.PlaySound) System.Media.SystemSounds.Asterisk.Play();
                 bool copied = _cfg.CopyToClipboard && CopyToClipboard(path);
-                // « copié » seulement si ça l'est vraiment : sinon l'utilisateur collerait
-                // le contenu précédent du presse-papiers en croyant coller sa capture.
+                // "copied" only when it really is: otherwise the user would paste the
+                // previous clipboard content thinking they were pasting their capture.
                 _tray.ShowBalloonTip(1500, "Screenshot",
                     Path.GetFileName(path) + (copied ? " — copied to clipboard" : ""), ToolTipIcon.Info);
             }
@@ -1222,8 +1222,8 @@ internal class TrayApp : Form
     void RefreshHotkeyLabels()
     {
         _miScreen.Text = $"Capture screen ({_hotkeys[0].Label})";
-        // Available, pas Visible : le getter de Visible vaut false tant que le menu n'est
-        // pas déroulé, donc s'en servir comme condition laisserait l'entrée sans libellé.
+        // Available, not Visible: the Visible getter is false until the menu has been
+        // dropped down, so using it as the condition would leave the entry unlabelled.
         bool hasWindowHotkey = _hotkeys.Length > 1;
         _miWindow.Available = hasWindowHotkey;
         if (hasWindowHotkey) _miWindow.Text = $"Capture window ({_hotkeys[1].Label})";
@@ -1250,30 +1250,30 @@ internal class TrayApp : Form
         Process.Start("explorer.exe", _cfg.OutputDir);
     }
 
-    /// Presse-papiers : bitmap (DIB) + flux PNG, pour que Paint, Discord, navigateurs… collent tous.
-    /// La lecture et le décodage se font sur le thread appelant (worker) : le thread UI fait
-    /// aussi tourner HookProc, et Windows retire un hook clavier qui dépasse
-    /// LowLevelHooksTimeout (~300 ms). Décoder un PNG 4K là-dessus tuerait le hotkey.
-    /// Seul le dépôt final exige un thread STA, donc lui seul passe par Invoke.
+    /// Clipboard: bitmap (DIB) + PNG stream, so Paint, Discord, browsers... all paste fine.
+    /// Reading and decoding happen on the calling (worker) thread: the UI thread also runs
+    /// HookProc, and Windows drops a keyboard hook that exceeds LowLevelHooksTimeout
+    /// (~300 ms). Decoding a 4K PNG there would kill the hotkey.
+    /// Only the final hand-off needs an STA thread, so only that goes through Invoke.
     bool CopyToClipboard(string path)
     {
         try
         {
             byte[] png = File.ReadAllBytes(path);
-            using var bmpStream = new MemoryStream(png);   // doit rester ouvert tant que bmp vit
+            using var bmpStream = new MemoryStream(png);   // must stay open as long as bmp lives
             using var bmp = new Bitmap(bmpStream);
             using var pngStream = new MemoryStream(png);
             var data = new DataObject();
             data.SetImage(bmp);
             data.SetData("PNG", false, pngStream);
-            // copy: true => OleFlushClipboard rend tous les formats avant de revenir,
-            // donc disposer bmp/flux juste après est sans danger.
+            // copy: true => OleFlushClipboard renders every format before returning,
+            // so disposing bmp and the streams right after is safe.
             Invoke(new Action(() => Clipboard.SetDataObject(data, copy: true, retryTimes: 5, retryDelay: 100)));
             return true;
         }
         catch (Exception ex)
         {
-            Program.Log($"clipboard failed ({ex.Message})");   // non bloquant : le PNG est déjà sur disque
+            Program.Log($"clipboard failed ({ex.Message})");   // non-blocking: the PNG is already on disk
             return false;
         }
     }
@@ -1285,17 +1285,17 @@ internal class TrayApp : Form
             Description = "Folder where captures are saved",
             UseDescriptionForTitle = true,
             InitialDirectory = Directory.Exists(_cfg.OutputDir) ? _cfg.OutputDir : "",
-            // InitialDirectory n'est qu'un défaut, ignoré dès que le picker a mémorisé un
-            // dernier dossier : c'est SelectedPath qui impose vraiment le point de départ.
+            // InitialDirectory is only a default, ignored as soon as the picker has
+            // remembered a last folder: SelectedPath is what really sets the starting point.
             SelectedPath = Directory.Exists(_cfg.OutputDir) ? _cfg.OutputDir : "",
             ShowNewFolderButton = true,
         };
         if (dlg.ShowDialog() != DialogResult.OK) return;
 
-        // Une capture déjà lancée lit OutputDir au moment de l'enregistrement : elle peut
-        // donc atterrir dans l'ancien ou le nouveau dossier. Sans conséquence, le chemin
-        // retenu est journalisé à chaque capture.
-        _cfg.OutputDir = dlg.SelectedPath;          // pris en compte à la prochaine capture
+        // A capture already in flight reads OutputDir when it saves: it can therefore land
+        // in the old or the new folder. Harmless, and the path actually used is logged on
+        // every capture.
+        _cfg.OutputDir = dlg.SelectedPath;          // takes effect on the next capture
         bool saved = _cfg.Save();
         Program.Log(saved
             ? $"output folder -> {_cfg.OutputDir}"

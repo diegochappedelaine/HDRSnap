@@ -13,8 +13,8 @@ public class HotkeyTableTests
     [Theory]
     [InlineData((uint)Keys.F11, 0x0u, 0)]
     [InlineData((uint)Keys.F11, 0x2u, 1)]
-    [InlineData((uint)Keys.F11, 0x4u, -1)]   // Shift+F11 : rien
-    [InlineData((uint)Keys.F11, 0x6u, -1)]   // Ctrl+Shift+F11 : rien (égalité exacte)
+    [InlineData((uint)Keys.F11, 0x4u, -1)]   // Shift+F11: no match
+    [InlineData((uint)Keys.F11, 0x6u, -1)]   // Ctrl+Shift+F11: no match (exact equality)
     [InlineData((uint)Keys.F12, 0x0u, -1)]
     public void FindHotkey_matches_exact_mods(uint vk, uint mods, int expected)
         => Assert.Equal(expected, TrayApp.FindHotkey(Table, vk, mods));

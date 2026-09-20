@@ -3,8 +3,8 @@ using Xunit;
 
 namespace HDRSnap.Tests;
 
-/// Les tailles doivent être celles de wingdi.h / winuser.h : QueryDisplayConfig écrit
-/// des enregistrements natifs dans un tableau marshalé au pas de la struct managée.
+/// The sizes must be those of wingdi.h / winuser.h: QueryDisplayConfig writes native
+/// records into an array marshalled at the stride of the managed struct.
 public class InteropLayoutTests
 {
     [Fact] public void Luid_is_8()                    => Assert.Equal(8,   Marshal.SizeOf<Native.LUID>());

@@ -22,11 +22,11 @@ public class ConfigTests : IDisposable
     [Fact]
     public void Load_corrupt_json_returns_defaults_and_keeps_file()
     {
-        const string garbage = "{ \"Hotkey\": \"Ctrl+F12\", ";   // JSON tronqué
+        const string garbage = "{ \"Hotkey\": \"Ctrl+F12\", ";   // truncated JSON
         File.WriteAllText(CfgPath, garbage);
         var cfg = Config.Load(CfgPath);
         Assert.Equal("F11", cfg.Hotkey);
-        Assert.Equal(garbage, File.ReadAllText(CfgPath));      // pas écrasé
+        Assert.Equal(garbage, File.ReadAllText(CfgPath));      // not overwritten
         Assert.NotNull(Config.LoadWarning);
     }
 
@@ -74,7 +74,7 @@ public class ConfigTests : IDisposable
     public void TryParseHotkey_rejects_numeric_and_unreachable(string text)
     {
         var cfg = new Config { Hotkey = text };
-        Assert.False(cfg.TryParseHotkey(out _, out var vk, out var err), $"accepté avec vk={vk}");
+        Assert.False(cfg.TryParseHotkey(out _, out var vk, out var err), $"accepted with vk={vk}");
         Assert.False(string.IsNullOrEmpty(err));
     }
 
@@ -103,13 +103,13 @@ public class ConfigTests : IDisposable
     [Fact]
     public void Save_backs_up_a_config_that_Load_could_not_read()
     {
-        const string garbage = "{ \"Hotkey\": \"Ctrl+F12\", ";   // JSON tronqué
+        const string garbage = "{ \"Hotkey\": \"Ctrl+F12\", ";   // truncated JSON
         File.WriteAllText(CfgPath, garbage);
-        var cfg = Config.Load(CfgPath);            // conserve le fichier, rend des défauts
+        var cfg = Config.Load(CfgPath);            // keeps the file, returns defaults
         cfg.OutputDir = @"D:\Ailleurs";
 
         Assert.True(cfg.Save(CfgPath));
-        Assert.Equal(garbage, File.ReadAllText(CfgPath + ".bak"));   // l'original est sauvé
+        Assert.Equal(garbage, File.ReadAllText(CfgPath + ".bak"));   // the original is saved
         Assert.Equal(@"D:\Ailleurs", Config.Load(CfgPath).OutputDir);
     }
 
@@ -117,7 +117,7 @@ public class ConfigTests : IDisposable
     public void Save_of_a_loaded_config_makes_no_backup()
     {
         Assert.True(new Config { OutputDir = @"D:\Un" }.Save(CfgPath));
-        var cfg = Config.Load(CfgPath);            // relu correctement
+        var cfg = Config.Load(CfgPath);            // read back correctly
         cfg.OutputDir = @"D:\Deux";
         Assert.True(cfg.Save(CfgPath));
         Assert.False(File.Exists(CfgPath + ".bak"));
@@ -138,12 +138,12 @@ public class ConfigTests : IDisposable
                 bool b => !b,
                 string s => "x_" + s,
                 float f => f + 1f,
-                _ => throw new Exception($"type non géré dans le test : {p.Name} ({p.PropertyType})"),
+                _ => throw new Exception($"type not handled in the test: {p.Name} ({p.PropertyType})"),
             });
         }
         var dst = new Config();
         dst.CopyFrom(src);
         foreach (var p in typeof(Config).GetProperties().Where(p => p.CanWrite && !p.GetMethod.IsStatic))
-            Assert.True(Equals(p.GetValue(src), p.GetValue(dst)), $"{p.Name} non copié");
+            Assert.True(Equals(p.GetValue(src), p.GetValue(dst)), $"{p.Name} was not copied");
     }
 }

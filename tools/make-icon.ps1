@@ -1,6 +1,6 @@
-# Regenere HDRSnap.ico. Usage :
-#   powershell -ExecutionPolicy Bypass -File tools\make-icon.ps1 HDRSnap.ico [apercu.png]
-# Les couleurs du logo sont les deux degradés ci-dessous (plaque, puis disque).
+# Regenerates HDRSnap.ico. Usage:
+#   powershell -ExecutionPolicy Bypass -File tools\make-icon.ps1 HDRSnap.ico [preview.png]
+# The logo is the two gradients below (the plate, then the disc).
 
 Add-Type -AssemblyName System.Drawing
 $ErrorActionPreference = 'Stop'
@@ -18,8 +18,8 @@ function New-RoundedPath([double]$x, [double]$y, [double]$w, [double]$h, [double
   return $p
 }
 
-# Plaque sombre + disque chaud : une seule forme, identique a toutes les tailles,
-# donc rien a simplifier en dessous de 32 px.
+# Dark plate + warm disc: a single shape, identical at every size, so there is
+# nothing to simplify below 32 px.
 function New-HdrSnapBitmap {
   param([int]$S)
 
@@ -68,21 +68,21 @@ function Get-DibBytes([System.Drawing.Bitmap]$bmp) {
   $bw.Write([uint16]1);  $bw.Write([uint16]32); $bw.Write([uint32]0)
   $bw.Write([uint32]($w * $h * 4 + $maskStride * $h))
   $bw.Write([int32]0); $bw.Write([int32]0); $bw.Write([uint32]0); $bw.Write([uint32]0)
-  for ($y = $h - 1; $y -ge 0; $y--) { $bw.Write($buf, $y * $stride, $w * 4) }   # DIB = bas vers haut
-  $bw.Write((New-Object byte[] ($maskStride * $h)))                             # masque AND inutilise (alpha 32bpp)
+  for ($y = $h - 1; $y -ge 0; $y--) { $bw.Write($buf, $y * $stride, $w * 4) }   # a DIB runs bottom-up
+  $bw.Write((New-Object byte[] ($maskStride * $h)))                             # AND mask unused (32bpp alpha)
   $bw.Flush()
-  return ,$ms.ToArray()   # virgule : empeche PowerShell de derouler le byte[]
+  return ,$ms.ToArray()   # leading comma: stops PowerShell unrolling the byte[]
 }
 
-# 16=100%, 20=125%, 24=150%, 28=175%, 32=200%, 40=250%, 48/64/256 pour le shell.
-# Sans la taille exacte, Windows etire la plus proche et l icone bave.
+# 16=100%, 20=125%, 24=150%, 28=175%, 32=200%, 40=250%, 48/64/256 for the shell.
+# Without the exact size, Windows stretches the nearest one and the icon looks smeared.
 $sizes = @(16, 20, 24, 28, 32, 40, 48, 64, 256)
 $bitmaps = @{}
 $blobs = @()
 foreach ($s in $sizes) {
   $b = New-HdrSnapBitmap -S $s
   $bitmaps[$s] = $b
-  # DIB partout : System.Drawing.Icon ignore les entrees PNG, il ne verrait pas le 256
+  # DIB everywhere: System.Drawing.Icon ignores PNG entries, it would not see the 256
   $blobs += ,@($s, (Get-DibBytes $b))
 }
 
@@ -93,7 +93,7 @@ $offset = 6 + 16 * $blobs.Count
 foreach ($e in $blobs) {
   $sz = $e[0]; $bytes = $e[1]
   $dim = 0
-  if ($sz -lt 256) { $dim = $sz }   # 0 = 256 dans un ICONDIRENTRY
+  if ($sz -lt 256) { $dim = $sz }   # 0 means 256 in an ICONDIRENTRY
   $w.Write([byte]$dim); $w.Write([byte]$dim); $w.Write([byte]0); $w.Write([byte]0)
   $w.Write([uint16]1); $w.Write([uint16]32)
   $w.Write([uint32]$bytes.Length); $w.Write([uint32]$offset)
@@ -102,9 +102,9 @@ foreach ($e in $blobs) {
 foreach ($e in $blobs) { $w.Write([byte[]]$e[1]) }
 $w.Flush()
 [System.IO.File]::WriteAllBytes($args[0], $out.ToArray())
-Write-Output ("ico: {0} octets, {1} images" -f $out.Length, $blobs.Count)
+Write-Output ("ico: {0} bytes, {1} images" -f $out.Length, $blobs.Count)
 
-if ($args.Count -lt 2) { return }   # apercu optionnel
+if ($args.Count -lt 2) { return }   # preview is optional
 $prevW = 560; $prevH = 300
 $pv = New-Object System.Drawing.Bitmap($prevW, $prevH)
 $pg = [System.Drawing.Graphics]::FromImage($pv)
