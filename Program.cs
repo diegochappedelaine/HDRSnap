@@ -374,9 +374,6 @@ internal static class Capturer
     /// Debug (--forcetonemap) : passe par le tone mapper D2D même si la frame reste en plage SDR.
     public static bool ForceToneMap;
 
-    /// Avertissement non bloquant du dernier tir (null si RAS), lu par le tray pour la bulle.
-    public static string LastWarning;
-
     static void EnsureDevice()
     {
         if (_device != null) return;
@@ -447,7 +444,6 @@ internal static class Capturer
 
     static string CaptureToFileCore(Config cfg, CaptureMode mode, IntPtr hwnd = default)
     {
-        LastWarning = null;
         var (fgName, fgExe) = ForegroundApp();
         string appName = cfg.SubfolderPerApp ? fgName : null;
 
@@ -885,7 +881,7 @@ internal static class Capturer
     /// derriere le jeu, ecrete pile au blanc SDR. Si un jeu est au premier plan et que
     /// rien ne depasse ce plafond, la capture est probablement le bureau, pas le jeu.
     /// Faux positif possible sur une scene sombre entierement sous le blanc SDR : on
-    /// avertit sans bloquer, le PNG est enregistre normalement.
+    /// journalise seulement (aucune bulle), le PNG est enregistre normalement.
     static void WarnIfLooksLikeDesktop(string fgName, string fgExe, float p9999Nits, float maxNits, float sdrNits)
     {
         if (fgName == null) return;                        // bureau au premier plan : normal
@@ -900,7 +896,6 @@ internal static class Capturer
               + " untick 'Disable fullscreen optimizations' in its properties."
             : " Switch the game to borderless windowed.";
         Program.Log("WARNING " + msg);
-        LastWarning = msg;
     }
 }
 
@@ -934,6 +929,31 @@ internal class TrayApp : Form
     System.Windows.Forms.Timer _rehook;
     bool _rearmFailed;   // évite de journaliser la même panne de réarmement chaque minute
 
+    /// Icone embarquee plutot que ExtractAssociatedIcon : celui-ci ne rend que du 32x32,
+    /// alors que la zone de notification veut la taille systeme (16 en 100 %, 24 en 150 %).
+    static Icon AppIcon()
+    {
+        // Journalise le repli : sans ca, une ressource absente ou un ICO illisible
+        // se traduit juste par « l'icone Windows par defaut », sans rien pour le dire.
+        var want = SystemInformation.SmallIconSize;
+        try
+        {
+            using var s = typeof(TrayApp).Assembly.GetManifestResourceStream("HDRSnap.ico");
+            if (s != null)
+            {
+                var icon = new Icon(s, want);
+                Program.Log($"tray icon: embedded HDRSnap.ico, asked {want.Width}x{want.Height}, got {icon.Width}x{icon.Height}");
+                return icon;
+            }
+            Program.Log("WARNING tray icon: embedded resource HDRSnap.ico not found, using the default Windows icon");
+        }
+        catch (Exception ex)
+        {
+            Program.Log($"WARNING tray icon: {ex.GetType().Name} {ex.Message}, using the default Windows icon");
+        }
+        return SystemIcons.Application;
+    }
+
     public TrayApp(Config cfg)
     {
         _cfg = cfg;
@@ -959,7 +979,7 @@ internal class TrayApp : Form
 
         _tray = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = AppIcon(),
             Text = $"HDRSnap — {_hotkeys[0].Label}",
             Visible = true,
             ContextMenuStrip = menu,
@@ -1185,14 +1205,10 @@ internal class TrayApp : Form
                 // Le son d'abord : retour immédiat, sans attendre le presse-papiers.
                 if (_cfg.PlaySound) System.Media.SystemSounds.Asterisk.Play();
                 bool copied = _cfg.CopyToClipboard && CopyToClipboard(path);
-                string warn = Capturer.LastWarning;
-                if (warn != null)
-                    _tray.ShowBalloonTip(8000, "HDRSnap - suspicious capture", warn, ToolTipIcon.Warning);
-                else
-                    // « copié » seulement si ça l'est vraiment : sinon l'utilisateur collerait
-                    // le contenu précédent du presse-papiers en croyant coller sa capture.
-                    _tray.ShowBalloonTip(1500, "Screenshot",
-                        Path.GetFileName(path) + (copied ? " — copied to clipboard" : ""), ToolTipIcon.Info);
+                // « copié » seulement si ça l'est vraiment : sinon l'utilisateur collerait
+                // le contenu précédent du presse-papiers en croyant coller sa capture.
+                _tray.ShowBalloonTip(1500, "Screenshot",
+                    Path.GetFileName(path) + (copied ? " — copied to clipboard" : ""), ToolTipIcon.Info);
             }
             catch (Exception ex)
             {

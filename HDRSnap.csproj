@@ -10,6 +10,7 @@
     <AssemblyName>HDRSnap</AssemblyName>
     <RootNamespace>HDRSnap</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>HDRSnap.ico</ApplicationIcon>
     <DefaultItemExcludes>$(DefaultItemExcludes);tests/**;plans/**</DefaultItemExcludes>
   </PropertyGroup>
 
@@ -20,6 +21,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="HDRSnap.Tests" />
+    <EmbeddedResource Include="HDRSnap.ico" LogicalName="HDRSnap.ico" />
   </ItemGroup>
 
 </Project>
