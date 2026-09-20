@@ -200,6 +200,9 @@ internal static class Native
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
     }
 
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+    public static extern void SetCurrentProcessExplicitAppUserModelID([MarshalAs(UnmanagedType.LPWStr)] string appId);
+
     // --- DisplayConfig (monitor SDR white level) ---
     [DllImport("user32.dll")] public static extern int GetDisplayConfigBufferSizes(uint flags, out uint numPaths, out uint numModes);
     [DllImport("user32.dll")]
@@ -1068,7 +1071,7 @@ internal class TrayApp : Form
         Program.Log($"config reloaded (hotkeys {string.Join(", ", _hotkeys.Select(h => h.Label))}, folder {_cfg.OutputDir})");
         _tray.ShowBalloonTip(2500, "HDRSnap",
             warnings.Count > 0 ? string.Join("\n", warnings) : $"Configuration reloaded — {_hotkeys[0].Label}",
-            warnings.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.Info);
+            warnings.Count > 0 ? ToolTipIcon.Warning : ToolTipIcon.None);
     }
 
     void InstallHook()
@@ -1208,7 +1211,7 @@ internal class TrayApp : Form
                 // "copied" only when it really is: otherwise the user would paste the
                 // previous clipboard content thinking they were pasting their capture.
                 _tray.ShowBalloonTip(1500, "Screenshot",
-                    Path.GetFileName(path) + (copied ? " — copied to clipboard" : ""), ToolTipIcon.Info);
+                    Path.GetFileName(path) + (copied ? " — copied to clipboard" : ""), ToolTipIcon.None);
             }
             catch (Exception ex)
             {
@@ -1302,7 +1305,7 @@ internal class TrayApp : Form
             : $"ERR config not saved ({Config.LastSaveError}); output folder -> {_cfg.OutputDir} (until restart)");
         _tray.ShowBalloonTip(3000, "HDRSnap",
             saved ? $"Captures go to: {_cfg.OutputDir}" : "Folder changed, but config.json could not be written.",
-            saved ? ToolTipIcon.Info : ToolTipIcon.Warning);
+            saved ? ToolTipIcon.None : ToolTipIcon.Warning);
     }
 
     protected override void Dispose(bool disposing)
@@ -1316,6 +1319,157 @@ internal class TrayApp : Form
             _tray.Dispose();
         }
         base.Dispose(disposing);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Toast identity (AppUserModelID)
+// ---------------------------------------------------------------------------
+
+/// Windows 11 renders a legacy balloon tip as a toast, and the toast does NOT use the
+/// tray icon: it looks the app up by AppUserModelID. A process without one falls back
+/// to the generic "application" icon, however good the tray icon is. Declaring an AUMID
+/// is only half of it - the AUMID has to resolve to a Start Menu shortcut carrying the
+/// same ID, and it is that shortcut's icon the toast shows.
+internal static class AppIdentity
+{
+    public const string Aumid = "HDRSnap.Tray";
+
+    static readonly Guid CLSID_ShellLink = new("00021401-0000-0000-C000-000000000046");
+
+    /// System.AppUserModel.ID
+    static PROPERTYKEY PkeyAppUserModelId => new()
+    {
+        fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"),
+        pid = 5,
+    };
+
+    /// Call before any window or balloon exists: the shell caches the identity of a
+    /// process the first time it shows something for it.
+    public static void Ensure()
+    {
+        try
+        {
+            Native.SetCurrentProcessExplicitAppUserModelID(Aumid);
+            string exe = Environment.ProcessPath;
+            if (exe == null) return;
+            string lnk = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.Programs), "HDRSnap.lnk");
+            if (ShortcutPointsAt(lnk, exe)) return;
+            CreateShortcut(lnk, exe);
+            Program.Log($"start menu shortcut written for toast identity: {lnk}");
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: captures still work, only the toast icon stays generic.
+            Program.Log($"WARNING toast identity: {ex.GetType().Name} {ex.Message}");
+        }
+    }
+
+    /// Rewriting the shortcut on every start would reset a pin the user may have made,
+    /// so only touch it when it is missing or aimed somewhere else.
+    static bool ShortcutPointsAt(string lnk, string exe)
+    {
+        if (!File.Exists(lnk)) return false;
+        try
+        {
+            var link = (IShellLinkW)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_ShellLink));
+            ((IPersistFile)link).Load(lnk, 0);
+            var sb = new System.Text.StringBuilder(1024);
+            link.GetPath(sb, sb.Capacity, IntPtr.Zero, 0);
+            return string.Equals(sb.ToString(), exe, StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    static void CreateShortcut(string lnk, string exe)
+    {
+        var link = (IShellLinkW)Activator.CreateInstance(Type.GetTypeFromCLSID(CLSID_ShellLink));
+        link.SetPath(exe);
+        link.SetWorkingDirectory(Path.GetDirectoryName(exe));
+        link.SetDescription("HDR screenshots, tone mapped to SDR PNG");
+
+        // The AUMID has to be on the shortcut before it is saved: it is what ties the
+        // running process (same string) to this shortcut, and therefore to its icon.
+        var store = (IPropertyStore)link;
+        var key = PkeyAppUserModelId;
+        var pv = new PROPVARIANT { vt = 31 /* VT_LPWSTR */, p = Marshal.StringToCoTaskMemUni(Aumid) };
+        try
+        {
+            store.SetValue(ref key, ref pv);
+            store.Commit();
+        }
+        finally { Marshal.FreeCoTaskMem(pv.p); }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(lnk));
+        ((IPersistFile)link).Save(lnk, true);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct PROPERTYKEY
+    {
+        public Guid fmtid;
+        public uint pid;
+    }
+
+    /// 24 bytes on x64: vt + 3 reserved ushorts, then the 16-byte union.
+    [StructLayout(LayoutKind.Sequential)]
+    struct PROPVARIANT
+    {
+        public ushort vt;
+        ushort r1, r2, r3;
+        public IntPtr p;
+        IntPtr p2;
+    }
+
+    [ComImport, Guid("000214F9-0000-0000-C000-000000000046"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellLinkW
+    {
+        // Declared in vtable order; the unused slots still have to be here.
+        void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder file,
+                     int cch, IntPtr fd, uint flags);
+        void GetIDList(out IntPtr ppidl);
+        void SetIDList(IntPtr pidl);
+        void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder name, int cch);
+        void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string name);
+        void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder dir, int cch);
+        void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string dir);
+        void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder args, int cch);
+        void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string args);
+        void GetHotkey(out ushort hotkey);
+        void SetHotkey(ushort hotkey);
+        void GetShowCmd(out int showCmd);
+        void SetShowCmd(int showCmd);
+        void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] System.Text.StringBuilder path,
+                             int cch, out int index);
+        void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string path, int index);
+        void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, uint reserved);
+        void Resolve(IntPtr hwnd, uint flags);
+        void SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
+    }
+
+    [ComImport, Guid("0000010b-0000-0000-C000-000000000046"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IPersistFile
+    {
+        void GetClassID(out Guid classId);
+        [PreserveSig] int IsDirty();
+        void Load([MarshalAs(UnmanagedType.LPWStr)] string file, uint mode);
+        void Save([MarshalAs(UnmanagedType.LPWStr)] string file, [MarshalAs(UnmanagedType.Bool)] bool remember);
+        void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string file);
+        void GetCurFile([Out, MarshalAs(UnmanagedType.LPWStr)] out string file);
+    }
+
+    [ComImport, Guid("886d8eeb-8cf2-4446-8d02-cdba1dbdcf99"),
+     InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IPropertyStore
+    {
+        void GetCount(out uint count);
+        void GetAt(uint index, out PROPERTYKEY key);
+        void GetValue(ref PROPERTYKEY key, out PROPVARIANT value);
+        void SetValue(ref PROPERTYKEY key, ref PROPVARIANT value);
+        void Commit();
     }
 }
 
@@ -1356,6 +1510,9 @@ internal static class Program
             MessageBox.Show("Windows Graphics Capture is not supported on this system.", "HDRSnap");
             return;
         }
+
+        // Before any window exists: the shell pins a process identity to the first thing it shows.
+        AppIdentity.Ensure();
 
         ApplicationConfiguration.Initialize();
         Application.Run(new TrayApp(cfg));
