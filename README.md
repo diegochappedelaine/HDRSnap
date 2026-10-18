@@ -1,60 +1,66 @@
 # HDRSnap
 
-A small homemade screenshot tool for Windows, built to replace ShareX on HDR displays — ShareX botches the tone mapping and blows out the highlights.
+A small screenshot tool for Windows HDR displays. ShareX botches the tone mapping on HDR and blows out the highlights; HDRSnap tone-maps the capture properly and saves an SDR PNG that looks like what was on screen.
 
-## What it does
+## Features
 
-- Global hotkey (`F11` by default) → captures the monitor under the cursor via Windows Graphics Capture. The hotkey goes through a low-level keyboard hook (`WH_KEYBOARD_LL`) rather than `RegisterHotKey`, for the reason in the gotchas below. A second hotkey (`WindowHotkey`, `Ctrl+F11` by default) captures only the foreground window.
-- On an HDR display: captures in FP16 scRGB, tone-maps on the GPU via the Direct2D `HDR Tone Map` effect (the same one Photos / Windows Snipping Tool use). The target is computed from the MaxCLL measured on the frame (99.99th percentile) and the monitor's actual SDR white level, with a CPU fallback (extended Reinhard) if the GPU path fails.
-- Outputs SDR PNGs, one subfolder per foreground app (`Pictures\HDRSnap\<ProcessName>\yyyy-MM-dd HH-mm-ss.png`).
-- Runs from the system tray, single instance (mutex).
+- `F11` captures the monitor under the cursor, `Ctrl+F11` only the foreground window.
+- HDR frames are tone-mapped on the GPU with the Direct2D `HDR Tone Map` effect (the one Photos and Snipping Tool use), targeting the monitor's real SDR white level. A CPU fallback (extended Reinhard) takes over if the GPU path fails.
+- Saves an SDR PNG per capture, in one subfolder per app (`Pictures\HDRSnap\<ProcessName>\yyyy-MM-dd HH-mm-ss.png`), and copies it to the clipboard.
+- The hotkey still works in games that block regular hotkeys.
+- Lives in the system tray. Config changes apply on save, no restart.
+
+## Install
+
+1. Download `HDRSnap.exe` from the [releases](https://github.com/diegochappedelaine/HDRSnap/releases), or [build it](#build). It is portable: no installer, no .NET runtime needed.
+2. Run it. It appears in the tray.
+3. To start it with Windows, put a shortcut to the exe in `shell:startup`.
+
+## Configuration
+
+`%APPDATA%\HDRSnap\config.json` is created on first run. Open it from the tray menu (*Edit configuration…*); changes apply as soon as the file is saved.
+
+| Key | Default | Description |
+|---|---|---|
+| `Hotkey` | `F11` | Screen capture hotkey (e.g. `Ctrl+Shift+F11`) |
+| `WindowHotkey` | `Ctrl+F11` | Foreground window capture hotkey (empty string disables it) |
+| `OutputDir` | `Pictures\HDRSnap` | Output folder (also settable from the tray: *Choose output folder…*) |
+| `CaptureCursor` | `false` | Include the cursor in the capture |
+| `PlaySound` | `true` | Play a confirmation sound |
+| `CopyToClipboard` | `true` | Copy each capture to the clipboard (PNG + bitmap); not with `--shoot` |
+| `SubfolderPerApp` | `true` | Save into a subfolder named after the foreground process |
+| `TonemapHeadroom` | `1.25` | Headroom above SDR white for highlights (× SDR white) |
+
+The log is at `%APPDATA%\HDRSnap\hdrsnap.log`.
+
+## Limitations
+
+- **True exclusive fullscreen can't be captured.** Windows Graphics Capture returns the desktop behind the game instead. Use borderless windowed, or make sure *Disable fullscreen optimizations* is not ticked in the game exe's properties. HDRSnap logs a `WARNING` when a capture looks like this.
+- **Games running as administrator** don't see HDRSnap's hotkey unless HDRSnap runs as administrator too.
 
 ## Build
 
-Requires the .NET 9 SDK (Windows).
+Requires Windows and the .NET 9 SDK.
 
 ```powershell
 dotnet build -c Release
+dotnet test tests/HDRSnap.Tests -c Release
 ```
 
-The app icon is generated, not hand-drawn: `powershell -ExecutionPolicy Bypass -File tools\make-icon.ps1 HDRSnap.ico` rewrites it (9 sizes, 16 to 256 — the exact DPI sizes matter, see the technical notes).
-
-For a self-contained portable executable (single .exe, no dependency on an installed runtime):
+Portable single-file exe:
 
 ```powershell
 dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -o publish
 ```
 
-## Installation
+Capture from the command line, for testing:
 
-1. Copy `publish\HDRSnap.exe` anywhere you like (no installer needed).
-2. Run it once to generate the default config at `%APPDATA%\HDRSnap\config.json` (also reachable from the tray menu: *Edit configuration…*). Edits are applied on save, no restart needed.
-3. For autostart: drop a shortcut to the exe in `shell:startup`.
+- `HDRSnap.exe --shoot` captures once and exits.
+- `--window` captures the foreground window instead (at launch, that is usually the console).
+- `--forcetonemap` forces the Direct2D tone-mapping path even on a frame within SDR range.
 
-### Config (`%APPDATA%\HDRSnap\config.json`)
+The app icon is generated: `powershell -ExecutionPolicy Bypass -File tools\make-icon.ps1 HDRSnap.ico`.
 
-| Key | Default | Description |
-|---|---|---|
-| `Hotkey` | `F11` | Global hotkey (e.g. `Ctrl+Shift+F11`) |
-| `WindowHotkey` | `Ctrl+F11` | Hotkey to capture only the foreground window (empty string disables) |
-| `OutputDir` | `Pictures\HDRSnap` | Output folder (can also be changed from the tray menu: *Choose output folder…*) |
-| `CaptureCursor` | `false` | Include the cursor in the capture |
-| `PlaySound` | `true` | Confirmation sound |
-| `CopyToClipboard` | `true` | Also copy the capture to the clipboard (PNG + bitmap); tray mode only |
-| `SubfolderPerApp` | `true` | Subfolder named after the foreground process |
-| `TonemapHeadroom` | `1.25` | Headroom above SDR white allotted to highlights (× SDR white, in nits) |
+## Technical notes
 
-Log: `%APPDATA%\HDRSnap\hdrsnap.log`.
-
-Command-line test: `HDRSnap.exe --shoot` (add `--forcetonemap` to force the D2D tone-mapping path even on a frame that stays within SDR range — useful for debugging, or `--window` to capture the foreground window at launch time, which is usually the console).
-
-## Technical notes / known gotchas
-
-- Earlier versions saw `DisplayConfig GET_SDR_WHITE_LEVEL` fail with error 87 and blamed the Windows build. The actual cause was in HDRSnap's own P/Invoke: `DISPLAYCONFIG_PATH_TARGET_INFO.refreshRate` was declared as a 64-bit integer, which padded the struct to 56 bytes instead of the native 48, so `QueryDisplayConfig` results were read at the wrong stride and the target adapter/id passed to the API were garbage. The struct sizes are now pinned by `tests/HDRSnap.Tests/InteropLayoutTests.cs`. The registry fallback (`HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers\MonitorDataStore\<id>\SDRWhiteLevel`, in 1/1000 units, e.g. 6000 = 480 nits) is kept, then 200 nits if everything fails. Note the registry fallback picks the max across all monitors and logs a warning when they differ.
-- A misdetected SDR white level (silently falling back to 200 nits instead of the monitor's real value) was the main cause of blown-out highlights in an earlier version — the API → registry → default chain, plus computing MaxCLL at the 99.99th percentile (instead of the absolute max, which is sensitive to a single stray pixel), fixes that.
-- `RegisterHotKey` is unusable for a capture tool. A game that registers for raw keyboard input with `RIDEV_NOHOTKEYS` (observed on Pragmata) asks Windows to stop processing application-defined hotkeys while it has focus. The registration stays alive — another process calling `RegisterHotKey` on the same key still gets error 1409 — but `WM_HOTKEY` is never posted, so the hotkey silently does nothing in-game and logs nothing at all. A `WH_KEYBOARD_LL` hook runs before that stage and is unaffected. To diagnose the same class of problem: poll `GetAsyncKeyState` from a background process; if the key is seen while the game is in the foreground but the log stays empty, this is it.
-- A low-level hook is still blind to a game running elevated (UIPI blocks input from a higher-integrity foreground window), so HDRSnap has to run elevated too in that case.
-- A Windows app has three separate icon paths, and fixing one does nothing for the others: the exe resource (`ApplicationIcon`, used by Explorer and the taskbar), the tray `HICON` (`NotifyIcon.Icon`), and the identity of a notification. Windows 11 renders a legacy balloon tip as a toast, and that toast does not use the tray icon at all — it resolves the app by `AppUserModelID`. With no AUMID the toast falls back to the generic "application" icon no matter how good the tray icon is, so `AppIdentity.Ensure()` calls `SetCurrentProcessExplicitAppUserModelID` and writes a Start Menu shortcut carrying the same ID; it is that shortcut's icon the toast shows. Separately, `ToolTipIcon.Info` maps to `NIIF_INFO`, which makes the shell draw its own blue "i" as the balloon image — `ToolTipIcon.None` lets the app icon through instead.
-- The tray icon is loaded from the `HDRSnap.ico` embedded resource at `SystemInformation.SmallIconSize`, and that size follows the display scaling: 16 px at 100 %, **20 px at 125 %**, 24 at 150 %, 28 at 175 %, 32 at 200 %. An `.ico` missing the exact size still loads — Windows just stretches the nearest one, which looks blurry and broken rather than failing outright. `tools/make-icon.ps1` therefore emits 16/20/24/28/32/40/48/64/256. `AppIcon()` logs the size it asked for and the size it got, which is the quickest way to spot this again.
-- Window capture goes through `IGraphicsCaptureItemInterop.CreateForWindow`. It has the same limitation as monitor capture on true exclusive fullscreen (see the fullscreen-optimizations bullet below), and the "looks like the desktop" check is deliberately not applied to window captures, since that heuristic assumes a full-monitor frame.
-- Fullscreen optimizations convert legacy exclusive fullscreen into a DWM-composed flip, which is what makes Windows Graphics Capture work in games at all. When they are turned off for an exe (the `DISABLEDXMAXIMIZEDWINDOWEDMODE` compat flag under `AppCompatFlags\Layers`), the game gets true exclusive fullscreen and the capture returns the desktop behind it, clipped exactly at SDR white. HDRSnap recognises that shape — a game in the foreground and both the 99.99th percentile and the max pinned to SDR white — and logs a `WARNING` line in `hdrsnap.log` (pointing at the compat flag when it is set) instead of silently saving a desktop screenshot without a trace. It is log-only on purpose: the heuristic has false positives on dark scenes, so it never interrupts with a tray balloon. Capturing true exclusive fullscreen would require hooking `IDXGISwapChain::Present` the way OBS game capture does, which is out of scope here.
+[docs/technical-notes.md](docs/technical-notes.md) covers the Windows pitfalls hit along the way: why `RegisterHotKey` silently fails in some games, the struct padding bug that broke SDR white detection, and why an app icon has three separate paths.

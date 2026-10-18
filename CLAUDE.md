@@ -1,8 +1,8 @@
 # HDRSnap — notes for agents
 
 Windows-only tray screenshot tool that tone-maps HDR captures to SDR PNGs.
-One app project (`Program.cs`) plus a test project. Read `README.md` first:
-its "Technical notes / known gotchas" section records hard-won platform facts
+One app project (`Program.cs`) plus a test project. Read `README.md` and
+`docs/technical-notes.md` first: the notes record hard-won platform facts
 (hotkey hook vs RegisterHotKey, SDR white level detection, fullscreen
 optimizations). Do not undo any of them.
 
