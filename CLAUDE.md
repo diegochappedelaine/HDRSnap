@@ -27,14 +27,11 @@ optimizations). Do not undo any of them.
 - `tests/HDRSnap.Tests/` — xUnit. Pure pixel functions are `internal` and
   exposed via `InternalsVisibleTo`. Tests build synthetic scRGB FP16 (`Half`)
   buffers; see `PixelMathTests.cs` for the helpers.
-- `plans/` — implementation plans written by an advisor session; `plans/README.md`
-  is the index. Not shipped.
 
 ## Conventions
 
 - Everything in the repo is English: identifiers, UI strings, log messages, code
-  comments and commit messages. Do not add French, and do not rewrite the older
-  French commits already in `git log`.
+  comments and commit messages. Do not add French.
 - Package versions: wildcard major (`3.*`).
 - Commit messages: `Area: description` (e.g. `Tray: ...`, `Icon: ...`).
 - Pixel math: scRGB linear, `1.0 = 80 nits`, 4 channels per pixel, row pitch

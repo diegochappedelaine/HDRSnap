@@ -11,7 +11,7 @@
     <RootNamespace>HDRSnap</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>HDRSnap.ico</ApplicationIcon>
-    <DefaultItemExcludes>$(DefaultItemExcludes);tests/**;plans/**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);tests/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
